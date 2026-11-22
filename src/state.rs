@@ -106,6 +106,8 @@ pub struct State {
     pub socket: String,
     /// In a window of another desktop (or with no screen at all), not on a display of its own.
     pub nested: bool,
+    /// The X11 display kept for xwayland-satellite, if there is one.
+    pub x11: Option<crate::xwayland::X11>,
 
     pub config: Config,
     pub layout: Layout,
@@ -248,6 +250,7 @@ impl State {
             signal,
             socket,
             nested,
+            x11: None,
             layout,
             wins: HashMap::new(),
             unmapped: Vec::new(),
@@ -743,6 +746,9 @@ impl State {
         // In a window of another desktop, its own sockets would send clients' questions there.
         for k in ["NIRI_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "DISPLAY"] {
             c.env_remove(k);
+        }
+        if let Some(x11) = &self.x11 {
+            c.env("DISPLAY", format!(":{}", x11.display));
         }
         // What Softcore starts can ask it things with `softcore msg` (Rivet Shell does, for
         // its workspaces), wherever this Softcore was started from.

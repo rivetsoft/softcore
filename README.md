@@ -359,6 +359,22 @@ On displays of its own Softcore runs `softcore portal` itself; in a window, `--p
 Frames are copied through memory, which is simple and works everywhere, and costs more than
 it should on a 4K display: handing the GPU's own buffers to PipeWire is the next step there.
 
+## X11 programs
+
+Programs written for X11 open through
+[xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite), which has to be
+installed (0.7 or later) along with Xwayland. Softcore takes an X11 display number when it
+starts and gives it to what it runs as `DISPLAY`; satellite itself is started when the first
+X11 program asks, and again if it ever stops. Each X11 window then arrives as an ordinary
+window, so tiling, tabs, full screen and the rest treat it like any other.
+
+`xwayland=false` turns it off; without satellite installed Softcore says so in its log and
+carries on. Either is read when Softcore starts, not while it runs.
+
+X11 programs only know about each other: one of them can't read the keys typed into a
+Wayland window or take a picture of the screen the X11 way, and its main windows go where
+Softcore puts them, not where it asks.
+
 ## What clients get
 
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
@@ -380,7 +396,7 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   called by hand, the picker, the stream read by GStreamer), but not yet a browser going
   through xdg-desktop-portal, which needs a Softcore session and the files above installed.
   Sharing more than one thing in one request, and remembering a choice, aren't built.
-- X11 apps (no Xwayland), input methods, pointer locks for games, touch and tablets, touchpad
+- Input methods, pointer locks for games, touch and tablets, touchpad
   gestures, presentation timing.
 - Opacity per program: it is one setting for every unfocused window (`inactive_opacity`)
   until there are window rules. Blur doesn't follow a surface's round corners or its

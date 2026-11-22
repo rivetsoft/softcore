@@ -20,6 +20,7 @@ mod settings_cli;
 mod state;
 mod udev;
 mod watch;
+mod xwayland;
 mod ui;
 
 use std::time::Duration;
@@ -150,17 +151,22 @@ fn main() {
         .expect("a timer");
     watch::start(&event_loop.handle(), &mut state);
 
+    xwayland::start(&mut state);
     tracing::info!("Softcore is up: WAYLAND_DISPLAY={} SOFTCORE_SOCKET={}", state.socket, state.ipc.path().display());
     // For whoever started it (a script, a check) to find it.
     println!("WAYLAND_DISPLAY={}\nSOFTCORE_SOCKET={}", state.socket, state.ipc.path().display());
 
+    if let Some(x11) = &state.x11 {
+        println!("DISPLAY=:{}", x11.display);
+    }
     if !state.config.errors.is_empty() {
         state.ui.show(ui::Panel::Errors);
     }
     // On displays of its own Softcore is the session: tell D-Bus and systemd where it is, so
     // what they start (the portal, apps) finds it, and run the screen-sharing service.
     if !state.nested {
-        state.spawn("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET");
+        let display = if state.x11.is_some() { " DISPLAY" } else { "" };
+        state.spawn(&format!("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET{display}"));
     }
     if (portal || !state.nested)
         && let Ok(exe) = std::env::current_exe()
