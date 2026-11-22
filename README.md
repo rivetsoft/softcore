@@ -104,7 +104,8 @@ What makes it work from both sides:
   number in a range is a slider, `true`/`false` a switch, a few words a menu, `#rrggbb` a
   colour well. `softcore settings describe` prints the table as JSON.
 - **Things there are many of have a name in their key** (`bind.KEYS`, `output.NAME`,
-  `env.NAME`), so each is one line that can be found and changed. An empty binding
+  `env.NAME`, `rule.NAME`, `layer.NAME`, `workspace.NAME`, `scratchpad.NAME`,
+  `chord.KEYS`), so each is one line that can be found and changed. An empty binding
   (`bind.Mod+E=`) takes a default away. `spawn` is a plain list, in order.
 - **A change touches one line.** The writer (`SettingsFile`) puts the new value where the
   old one stood and leaves comments, blank lines, the order of things and keys it doesn't
@@ -136,7 +137,8 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
 `animation_speed`, `scroll`, `overview_zoom`, `tab_bar`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
-`accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
+`accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `chord_panel`,
+`chord_vim`, `xwayland`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
 
@@ -152,6 +154,113 @@ place of the action's own words, and `title=""` leaves it out of the panel:
 bind.Mod+T=title="Terminal" spawn rivet-terminal
 bind.Mod+Shift+P=title="" spawn some-script
 ```
+
+### Chords
+
+A binding can be several keys pressed one after another, with commas between them:
+
+```
+bind.Mod+G,T=spawn rivet-terminal
+bind.Mod+G,W,F=title="Browser" spawn firefox
+bind.Mod+G,W,M=spawn thunderbird
+chord.Mod+G=Go to
+chord.Mod+G,W=Internet
+```
+
+The first keys open the chord, and a list in the Rivet look shows what can come next: each
+key with what it does, and a `›` on those that lead on to more keys. Take the next step by
+pressing its key, or go up and down the list with the arrow keys and press Enter. Backspace
+goes back a step, Escape leaves, and so does any key that isn't part of the chord. Mod can
+stay held for the keys after the first.
+
+- `chord.KEYS=Name` names the list those keys open; without one it shows the keys.
+- `title="…"` on a binding is what its line says, and `title=""` keeps it off the list while
+  it still works.
+- `chord_panel=false` shows nothing: the keys work the same, and the arrow keys are no
+  longer taken.
+- `chord_vim=true` adds J and K for down and up, L to take and H to go back. A step of the
+  chord on one of those letters still wins.
+- Keys that begin a chord are no longer a binding of their own: `bind.Mod+W,F=…` takes
+  Mod+W away from what it did.
+
+## Rules
+
+Lines that say how particular things are treated. What follows the `=` is words with spaces
+between; a word that holds a space goes in quotes, and `*` in a program's name or a title
+stands for anything. Capitals don't matter.
+
+### Windows
+
+```
+rule.video=app-id=mpv floating opacity=1
+rule.chat=app-id=*discord* workspace=chat focus=false
+rule.notes=title="* - Notes" width=30% border=off shadow=off
+```
+
+`app-id=` and `title=` say which windows the line is about (both, when both are given; every
+window, when neither is). The rest is what those windows get:
+
+| Word | What it does |
+| --- | --- |
+| `floating`, `tiled` | Opens floating over the columns, or in a column whatever it asked for. |
+| `workspace=NAME` or `=N` | Opens on that workspace. |
+| `output=NAME` | Opens on that display. |
+| `width=40%` | The width of its column. |
+| `maximized`, `fullscreen` | Opens as wide as the screen, or with the whole screen. |
+| `focus=false` | Opens without taking the focus. |
+| `scratchpad=NAME` | Opens put away in that scratchpad. |
+| `opacity=0.9` | How solid it is, with the focus or without. Without this, `inactive_opacity` applies. |
+| `border=off`, `shadow=off`, `blur=off` | Drawn without one. |
+
+When several lines fit a window, each word is taken from the last line that has it. The top
+group is used once, as the window opens; the last three rows follow the window, so a title
+that changes can change how it looks. The name after `rule.` is only there so the line can
+be found and changed.
+
+### The shell's surfaces
+
+Panels, wallpapers and launchers go by the name each gives itself, which `softcore msg
+layers` lists:
+
+```
+layer.rivet-panel=opacity=0.9 blur shadow
+layer.notif*=blur=off
+```
+
+`opacity`, `blur` (on, or off even where the surface asked for it) and `shadow`. `blur_layers`
+still works and means the same as `blur` here.
+
+### Workspaces with names
+
+```
+workspace.chat=output=DP-2 scroll=vertical
+workspace.mail=
+```
+
+A named workspace is always there, empty or not, first in its display's stack in the order
+the lines stand. `output=` says which display it is made on (and goes back to when that
+display returns); `scroll=` which way it scrolls. A display with nothing on it yet starts on
+its first named workspace.
+
+Anywhere a workspace is given by number it can be given by name: `focus-workspace chat`,
+`move-column-to-workspace mail`, `workspace=chat` in a rule. A name is found on whichever
+display it is, and going to it takes the focus there. `softcore msg workspaces` and
+ext-workspace give the name.
+
+### Scratchpads with names
+
+```
+scratchpad.term=app-id=scratch-term command="rivet-terminal --class scratch-term" size=0.6
+bind.Mod+N=toggle-scratchpad term
+bind.Mod+Shift+N=move-window-to-scratchpad term
+```
+
+Each named scratchpad has its own key and its own windows; the scratchpad without a name
+(`Mod+S`) is separate from them all. `app-id=` and `title=` say which windows go into it as
+they open. `command=` is run when it is asked for and holds nothing, and the window is shown
+as soon as it opens, so one key starts the program the first time and shows and hides it
+after that. `size=` is how much of the screen its window takes, in place of
+`scratchpad_size`.
 
 ## Scrolling up and down
 
@@ -308,7 +417,7 @@ are see-through around their bars and a blurred band would cover the windows und
 ## Talking to it
 
 ```sh
-softcore msg windows            # also: outputs, workspaces, focused-window, focused-output
+softcore msg windows            # also: outputs, workspaces, layers, focused-window, focused-output
 softcore msg -j workspaces      # as one line of JSON
 softcore msg action focus-workspace 2
 softcore msg action close-window --id 4
@@ -375,12 +484,33 @@ X11 programs only know about each other: one of them can't read the keys typed i
 Wayland window or take a picture of the screen the X11 way, and its main windows go where
 Softcore puts them, not where it asks.
 
+## Touchpads, touchscreens, pens and input methods
+
+- **Three fingers on a touchpad** move what is in view: along the strip the windows scroll
+  with them, and across it the workspaces do. Letting go leaves the nearest column, or
+  workspace, in place. **Four fingers** up open the overview, and down close it. Swipes of
+  two fingers, pinches and holds go to the program under the pointer.
+- **A touchscreen** works as the program expects, and a finger put down gives the keyboard
+  to what it lands on.
+- **A drawing tablet's pen** moves the pointer and reaches the program as a pen, with its
+  pressure, tilt and buttons.
+- **A program may lock the pointer** in place and read how the mouse moves (games), or keep
+  it inside its window.
+- **Input methods** (fcitx5, ibus) can take what is typed and give text back, and their list
+  of candidates is drawn by the text.
+
+Of these only the pointer lock and fence can be checked without the hardware, and were; the
+rest is written against the layout's own tests and waits for a run on a real machine (see
+*What isn't built yet*). A touchscreen or tablet is taken to belong to the laptop's own
+display, or the first one.
+
 ## What clients get
 
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
 selection and data-control, drag and drop, idle notify and idle inhibit, xdg-activation,
 foreign-toplevel-list, ext-workspace (see below), screen capture (ext-image-copy-capture, of displays and of windows),
-virtual keyboards and pointers, blur behind a surface (ext-background-effect), fractional scale, viewporter,
+virtual keyboards and pointers, pointer constraints and relative pointer, pointer gestures,
+tablet, text-input and input-method, blur behind a surface (ext-background-effect), fractional scale, viewporter,
 cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dmabuf).
 
 A bar or dock that isn't Rivet's can list and switch workspaces through ext-workspace-v1.
@@ -401,19 +531,19 @@ and moving workspaces aren't offered, as Softcore makes and drops them itself.
   called by hand, the picker, the stream read by GStreamer), but not yet a browser going
   through xdg-desktop-portal, which needs a Softcore session and the files above installed.
   Sharing more than one thing in one request, and remembering a choice, aren't built.
-- Input methods, pointer locks for games, touch and tablets, touchpad
-  gestures, presentation timing.
-- Opacity per program: it is one setting for every unfocused window (`inactive_opacity`)
-  until there are window rules. Blur doesn't follow a surface's round corners or its
+- Fingers, pens and input methods on real hardware: three- and four-finger swipes, touch,
+  tablets and input methods are written and none has met a real device yet. A touchscreen
+  or tablet can't be given a display of its own choosing. Presentation timing.
+- Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
 - Animations for floating windows, which jump, as a floating window going to full screen does.
-- Window rules, named workspaces. Titles on the tabs: the strip shows how many there are and
+- In a rule, patterns are `*` only (no regular expressions), and there is nothing yet for
+  keeping a window out of screen sharing. Titles on the tabs: the strip shows how many there are and
   which is showing, not what they are. In the overview, dragging a window to
   another workspace, a corner of the screen that opens it, and a touchpad gesture for it.
   A dialog opens in the
   middle of the screen, not over its parent. A window carried by the pointer can't be
-  taken to a workspace out of view, or let go of as a floating window. Scratchpads with names of their own, and one that starts its program when
-  first asked for, wait for window rules.
+  taken to a workspace out of view, or let go of as a floating window.
 - Clipping a window's own corners: the border is drawn over them, which reads as rounded,
   but a window with no border has square corners.
 

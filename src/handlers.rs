@@ -389,7 +389,39 @@ impl SeatHandler for State {
 impl TabletSeatHandler for State {
     type ToolFocus = WlSurface;
 }
-impl PointerConstraintsHandler for State {}
+impl PointerConstraintsHandler for State {
+    // A lock or a fence asked for while the pointer is already on the window holds at once.
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &smithay::input::pointer::PointerHandle<Self>) {
+        if pointer.current_focus().as_ref() == Some(surface) {
+            self.constrain_pointer();
+        }
+    }
+}
+
+impl smithay::wayland::text_input::TextInputActivation for State {}
+
+impl smithay::wayland::input_method::InputMethodHandler for State {
+    // The list of candidates an input method shows by the text being typed.
+    fn new_popup(&mut self, surface: smithay::wayland::input_method::PopupSurface) {
+        let _ = self.popups.track_popup(PopupKind::from(surface));
+        self.queue_redraw();
+    }
+
+    fn dismiss_popup(&mut self, surface: smithay::wayland::input_method::PopupSurface) {
+        if let Some(parent) = surface.get_parent().map(|p| p.surface.clone()) {
+            let _ = smithay::desktop::PopupManager::dismiss_popup(&parent, &PopupKind::from(surface));
+        }
+        self.queue_redraw();
+    }
+
+    fn popup_repositioned(&mut self, _: smithay::wayland::input_method::PopupSurface) {
+        self.queue_redraw();
+    }
+
+    fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, smithay::utils::Logical> {
+        self.win_for_surface(parent).and_then(|id| self.wins.get(&id)).map(|w| w.window.geometry()).unwrap_or_default()
+    }
+}
 
 impl SelectionHandler for State {
     type SelectionUserData = ();

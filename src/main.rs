@@ -7,6 +7,7 @@ mod chord;
 mod cast;
 mod config;
 mod cursor;
+mod devices;
 mod float;
 mod handlers;
 mod host;

@@ -123,6 +123,18 @@ fn request(state: &mut State, args: &[String]) -> Result<Value, String> {
     match words.as_slice() {
         ["version"] => Ok(json!(env!("CARGO_PKG_VERSION"))),
         ["outputs"] => Ok(outputs(state)),
+        // The shell's surfaces, by the names `layer.NAME=` lines go by.
+        ["layers"] => {
+            let mut out = Vec::new();
+            for o in &state.outputs {
+                let map = smithay::desktop::layer_map_for_output(o);
+                for l in map.layers() {
+                    let g = map.layer_geometry(l).unwrap_or_default();
+                    out.push(json!({"namespace": l.namespace(), "output": o.name(), "layer": format!("{:?}", l.layer()).to_lowercase(), "x": g.loc.x, "y": g.loc.y, "width": g.size.w, "height": g.size.h}));
+                }
+            }
+            Ok(Value::Array(out))
+        }
         ["workspaces"] => Ok(workspaces(state)),
         ["windows"] => Ok(windows(state)),
         ["overview-state"] => Ok(json!({"is_open": state.overview.on})),

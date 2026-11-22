@@ -116,6 +116,8 @@ pub struct State {
     pub scratch_wanted: Option<String>,
     /// The keys of a chord pressed so far, and which of what can follow is picked out.
     pub chord: Option<crate::chord::Chord>,
+    /// Three or four fingers swiping on the touchpad.
+    pub swipe: Option<crate::devices::Swipe>,
 
     pub config: Config,
     pub layout: Layout,
@@ -239,6 +241,16 @@ impl State {
         smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState::new::<State, _>(&dh, |_| true);
         smithay::wayland::virtual_pointer::VirtualPointerManagerState::new::<State, _>(&dh, |_| true);
 
+        // Games that hold the pointer still and read how it moves; fingers on a touchpad;
+        // pens; and typing through an input method (text-input for the programs,
+        // input-method for the method itself).
+        smithay::wayland::pointer_constraints::PointerConstraintsState::new::<State>(&dh);
+        smithay::wayland::relative_pointer::RelativePointerManagerState::new::<State>(&dh);
+        smithay::wayland::pointer_gestures::PointerGesturesState::new::<State>(&dh);
+        smithay::wayland::tablet_manager::TabletManagerState::new::<State>(&dh);
+        smithay::wayland::text_input::TextInputManagerState::new::<State>(&dh);
+        smithay::wayland::input_method::InputMethodManagerState::new::<State, _>(&dh, |_| true);
+
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         let xkb = XkbConfig { layout: &config.xkb_layout, variant: &config.xkb_variant, options: (!config.xkb_options.is_empty()).then(|| config.xkb_options.clone()), ..Default::default() };
@@ -263,6 +275,7 @@ impl State {
             workspaces: Default::default(),
             scratch_wanted: None,
             chord: None,
+            swipe: None,
             layout,
             wins: HashMap::new(),
             unmapped: Vec::new(),

@@ -1,7 +1,7 @@
 //! Keys, the pointer and the wheel: what is Softcore's own (bindings, the open panel), and
 //! what goes on to the focused client.
 
-use smithay::backend::input::{AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent};
+use smithay::backend::input::{AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent};
 use smithay::input::keyboard::{FilterResult, Keysym, ModifiersState, xkb};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::output::Output;
@@ -117,17 +117,7 @@ impl State {
                     self.do_action(action);
                 }
             }
-            InputEvent::PointerMotion { event, .. } => {
-                let mut pos = self.pointer_pos + event.delta();
-                // Keep the pointer on a display: the nearest edge of the one it was on.
-                if self.output_at(pos).is_none()
-                    && let Some(g) = self.output_at(self.pointer_pos).or(self.outputs.first()).map(State::output_geometry)
-                {
-                    pos.x = pos.x.clamp(g.loc.x as f64, (g.loc.x + g.size.w - 1) as f64);
-                    pos.y = pos.y.clamp(g.loc.y as f64, (g.loc.y + g.size.h - 1) as f64);
-                }
-                self.pointer_moved(pos, event.time());
-            }
+            InputEvent::PointerMotion { event, .. } => self.pointer_motion::<I>(event),
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(g) = output.or(self.outputs.first()).map(State::output_geometry) else { return };
                 let pos = event.position_transformed(g.size) + g.loc.to_f64();
@@ -171,11 +161,16 @@ impl State {
                 pointer.frame(self);
             }
             InputEvent::PointerAxis { event, .. } => self.wheel::<I>(event),
-            _ => {}
+            other => self.device_input(other),
         }
     }
 
-    fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: smithay::backend::input::InputTime) {
+    /// A finger or a pen put down: the keyboard goes to what it lands on.
+    pub fn touched(&mut self, pos: Point<f64, Logical>) {
+        self.clicked(pos);
+    }
+
+    pub fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: smithay::backend::input::InputTime) {
         self.pointer_pos = pos;
         if self.drag.is_some() {
             // The window follows the pointer; nothing under it hears of the movement.
@@ -188,6 +183,7 @@ impl State {
         let pointer = self.seat.get_pointer().unwrap();
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
         pointer.frame(self);
+        self.constrain_pointer();
         self.queue_redraw();
     }
 
