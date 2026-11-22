@@ -207,11 +207,15 @@ pub struct Layout {
     /// Windows given a height of their own, as a part of the height a column has. The
     /// others share what is left.
     heights: HashMap<WinId, f64>,
+    /// Windows put away in the scratchpad, the next one to show first.
+    pub scratch: Vec<WinId>,
+    /// Windows out of the scratchpad and on show: the scratchpad key puts these away again.
+    shown: Vec<WinId>,
 }
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new() }
+        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), scratch: Vec::new(), shown: Vec::new() }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -360,6 +364,8 @@ impl Layout {
     }
 
     pub fn remove_window(&mut self, id: WinId) {
+        self.scratch.retain(|w| *w != id);
+        self.shown.retain(|w| *w != id);
         for m in &mut self.mons {
             for ws in &mut m.wss {
                 if ws.remove(id) {
@@ -599,11 +605,73 @@ impl Layout {
         ws.fullscreen = on.then_some(id);
     }
 
+    // ---- the scratchpad ----
+
+    /// Put the focused window away: out of sight, on no workspace, until asked for.
+    pub fn move_to_scratchpad(&mut self) {
+        let Some(id) = self.active_window() else { return };
+        if let Some(ws) = self.ws() {
+            ws.remove(id);
+        }
+        self.heights.remove(&id);
+        self.shown.retain(|w| *w != id);
+        self.scratch.push(id);
+        self.settle();
+    }
+
+    /// The scratchpad windows on show on the workspace in view.
+    pub fn scratchpad_in_view(&self) -> Vec<WinId> {
+        self.active_workspace().map(|ws| ws.floating.iter().copied().filter(|w| self.shown.contains(w)).collect()).unwrap_or_default()
+    }
+
+    /// The scratchpad key: put away what is on show here; else show the next window put
+    /// away, floating over this workspace; else bring over one on show somewhere else.
+    /// Says which window came into view.
+    pub fn toggle_scratchpad(&mut self) -> Option<WinId> {
+        let here = self.scratchpad_in_view();
+        if !here.is_empty() {
+            for id in here {
+                if let Some(ws) = self.ws() {
+                    ws.remove(id);
+                }
+                self.shown.retain(|w| *w != id);
+                self.scratch.push(id);
+            }
+            self.settle();
+            return None;
+        }
+        let id = if self.scratch.is_empty() { *self.shown.first()? } else { self.scratch.remove(0) };
+        if let Some((mi, wi)) = self.find(id) {
+            self.mons[mi].wss[wi].remove(id);
+        }
+        if !self.shown.contains(&id) {
+            self.shown.push(id);
+        }
+        let ws = self.ws()?;
+        ws.floating.push(id);
+        ws.float_focus = Some(id);
+        self.settle();
+        Some(id)
+    }
+
+    /// The size a window shown from the scratchpad is asked to be.
+    pub fn scratchpad_size(&self, id: WinId) -> Option<(i32, i32)> {
+        if !self.shown.contains(&id) {
+            return None;
+        }
+        let m = &self.mons[self.find(id)?.0];
+        let by = self.opts.scratchpad_size;
+        Some((((m.area.w as f64 * by).round() as i32).max(1), ((m.area.h as f64 * by).round() as i32).max(1)))
+    }
+
     pub fn toggle_floating(&mut self, id: WinId) {
         let Some((mi, wi)) = self.find(id) else { return };
         let width = self.opts.default_width;
         let ws = &mut self.mons[mi].wss[wi];
         if ws.floating.contains(&id) {
+            // Into a column, it is a window like any other again.
+            self.shown.retain(|w| *w != id);
+            let ws = &mut self.mons[mi].wss[wi];
             ws.floating.retain(|w| *w != id);
             ws.float_focus = None;
             ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false });
@@ -987,6 +1055,41 @@ mod tests {
         l.set_height(None, false);
         let (a, b) = (rect(&l, 1), rect(&l, 2));
         assert_eq!((a.0, b.0 + b.1, a.1), (12, 588, 281));
+    }
+
+    #[test]
+    fn the_scratchpad_puts_windows_away_and_brings_them_back() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.move_to_scratchpad();
+        assert_eq!((l.find(2), l.active_window(), l.scratch.clone()), (None, Some(1), vec![2]));
+        // Shown: floating, focused, at the scratchpad's size.
+        assert_eq!(l.toggle_scratchpad(), Some(2));
+        assert_eq!((l.is_floating(2), l.active_window(), l.scratchpad_size(2)), (true, Some(2), Some((700, 420))));
+        assert_eq!(l.scratchpad_size(1), None);
+        // And away again, with the focus back where it was.
+        assert_eq!(l.toggle_scratchpad(), None);
+        assert_eq!((l.find(2), l.active_window()), (None, Some(1)));
+        // On show on one workspace, asked for on another: it comes over.
+        l.toggle_scratchpad();
+        l.focus_workspace_by(1);
+        assert_eq!(l.toggle_scratchpad(), Some(2));
+        assert_eq!(l.find(2), Some((0, 1)));
+        // Two put away take turns.
+        l.toggle_scratchpad();
+        l.focus_workspace_by(-1);
+        l.move_to_scratchpad();
+        assert_eq!(l.scratch, vec![2, 1]);
+        assert_eq!(l.toggle_scratchpad(), Some(2));
+        l.toggle_scratchpad();
+        assert_eq!(l.toggle_scratchpad(), Some(1));
+        // Put into a column, it is an ordinary window again; closed, it is forgotten.
+        l.toggle_floating(1);
+        assert_eq!((l.toggle_scratchpad(), l.is_floating(1)), (Some(2), false));
+        l.remove_window(2);
+        assert_eq!(l.toggle_scratchpad(), None);
+        assert!(l.scratch.is_empty());
     }
 
     #[test]

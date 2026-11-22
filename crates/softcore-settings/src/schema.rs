@@ -92,6 +92,7 @@ pub const SETTINGS: &[Setting] = &[
     s("column_widths", Group::Columns, "Column widths", "The widths the next-width key steps through, as parts of the screen.", Kind::Widths, "0.3333,0.5,0.6667"),
     s("default_width", Group::Columns, "A new column's width", "As a part of the screen.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "0.5"),
     s("center_short_columns", Group::Columns, "Centre short columns", "A column made shorter than the screen sits in the middle of its height. Off: at the top.", Kind::Bool, "true"),
+    s("scratchpad_size", Group::Columns, "Scratchpad window size", "How much of the screen a window shown from the scratchpad takes, each way.", Kind::Float { min: 0.2, max: 1.0, step: 0.05 }, "0.7"),
     s("theme", Group::Look, "Theme", "For Softcore's own panels and the colours it takes from Rivet.", Kind::Choice(&["system", "light", "dark"]), "system"),
     s("accent", Group::Look, "Accent", "Used when the desktop's colours aren't followed.", Kind::Color, "#3584e4"),
     s("follow_desktop_colors", Group::Look, "Follow the desktop's colours", "The colours Rivet Shell makes from the wallpaper.", Kind::Bool, "true"),
@@ -377,6 +378,7 @@ impl Config {
             "animation_speed" => self.animation_speed = v.parse().unwrap_or(1.0),
             "column_widths" => self.layout.presets = widths(v).unwrap_or_default(),
             "center_short_columns" => self.layout.center_short_columns = boolean(),
+            "scratchpad_size" => self.layout.scratchpad_size = v.parse().unwrap_or(0.7),
             "default_width" => self.layout.default_width = v.parse().unwrap_or(0.5),
             "theme" => {
                 self.theme = match v {

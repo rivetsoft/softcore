@@ -32,7 +32,9 @@ In a window, Mod is Alt (the desktop outside keeps Super); on displays of its ow
 Mod+Shift+/ shows every key. The ones to know first: Mod+Return a terminal, Mod+Space the
 launcher, Mod+Q close, Mod+arrows move the focus, Mod+Ctrl+arrows move the window, Mod+R the
 next column width, Mod+Shift+Minus and Mod+Shift+Equal a shorter or taller window (it sits in
-the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces,
+the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces, Mod+Shift+S puts a
+window away in the scratchpad and Mod+S shows it floating over whatever is in view (and puts
+it away again),
 Mod+Shift+E leave.
 
 ## What it shares with Rivet
@@ -119,7 +121,7 @@ built yet.
 The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
-`animation_speed`, `column_widths`, `center_short_columns`, `default_width`, `theme`,
+`animation_speed`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -238,7 +240,9 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   see-through parts; it fills the rectangle.
 - Animations for floating windows and for going fullscreen and back, which jump.
 - Window rules, named workspaces, tabbed columns, moving and resizing floating windows with
-  the pointer, an overview.
+  the pointer (a floating window sits in the middle of the screen at the size it chose),
+  an overview. Scratchpads with names of their own, and one that starts its program when
+  first asked for, wait for window rules.
 - Clipping a window's own corners: the border is drawn over them, which reads as rounded,
   but a window with no border has square corners.
 

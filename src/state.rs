@@ -452,10 +452,12 @@ impl State {
             let Some(output) = self.output_named(&name).cloned() else { continue };
             let sizes = self.layout.sizes(mi, &self.float_size());
             for t in sizes {
+                // A floating window chooses its size, but one from the scratchpad is given one.
+                let scratch = self.layout.scratchpad_size(t.id);
                 let Some(win) = self.wins.get_mut(&t.id) else { continue };
                 let Some(top) = win.window.toplevel() else { continue };
                 top.with_pending_state(|s| {
-                    s.size = (!t.floating).then(|| (t.rect.w, t.rect.h).into());
+                    s.size = if t.floating { scratch.map(Into::into) } else { Some((t.rect.w, t.rect.h).into()) };
                     for st in [xdg_toplevel::State::TiledLeft, xdg_toplevel::State::TiledRight, xdg_toplevel::State::TiledTop, xdg_toplevel::State::TiledBottom] {
                         if t.floating {
                             s.states.unset(st);
@@ -715,6 +717,24 @@ impl State {
             Action::ToggleFloating => {
                 if let Some(id) = active {
                     self.layout.toggle_floating(id);
+                }
+            }
+            // Put away, a window fades out as one that closed does; shown, it fades in.
+            Action::MoveToScratchpad => {
+                if let Some(id) = active {
+                    crate::render::start_closing(self, id);
+                    self.layout.move_to_scratchpad();
+                }
+            }
+            Action::ToggleScratchpad => {
+                for id in self.layout.scratchpad_in_view() {
+                    crate::render::start_closing(self, id);
+                }
+                if let Some(id) = self.layout.toggle_scratchpad()
+                    && self.config.animations
+                    && let Some(w) = self.wins.get_mut(&id)
+                {
+                    w.shown = 0.0;
                 }
             }
             Action::SwitchFloatingFocus => self.layout.switch_floating_focus(),

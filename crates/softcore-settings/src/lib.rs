@@ -43,11 +43,13 @@ pub struct Options {
     /// A column whose windows don't fill the screen's height sits in the middle of it
     /// (else at the top).
     pub center_short_columns: bool,
+    /// How much of the screen a window shown from the scratchpad takes, each way.
+    pub scratchpad_size: f64,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7 }
     }
 }
 
@@ -76,6 +78,8 @@ pub enum Action {
     FullscreenWindow,
     CenterColumn,
     ToggleFloating,
+    MoveToScratchpad,
+    ToggleScratchpad,
     SwitchFloatingFocus,
     FocusWorkspace(usize),
     FocusWorkspaceBy(i32),
@@ -129,6 +133,8 @@ impl Action {
             "fullscreen-window" => Action::FullscreenWindow,
             "center-column" => Action::CenterColumn,
             "toggle-window-floating" => Action::ToggleFloating,
+            "move-window-to-scratchpad" => Action::MoveToScratchpad,
+            "toggle-scratchpad" => Action::ToggleScratchpad,
             "switch-focus-between-floating-and-tiling" => Action::SwitchFloatingFocus,
             "focus-workspace" => Action::FocusWorkspace(num("a workspace number")? - 1),
             "focus-workspace-down" => Action::FocusWorkspaceBy(1),
@@ -174,6 +180,8 @@ impl Action {
             Action::FullscreenWindow => "Full screen".into(),
             Action::CenterColumn => "Centre the column".into(),
             Action::ToggleFloating => "Float the window, or put it back".into(),
+            Action::MoveToScratchpad => "Put the window away in the scratchpad".into(),
+            Action::ToggleScratchpad => "Show the scratchpad, or put it away".into(),
             Action::SwitchFloatingFocus => "Between floating windows and columns".into(),
             Action::FocusWorkspace(n) => format!("Workspace {}", n + 1),
             Action::FocusWorkspaceBy(b) => format!("Workspace {}", if *b > 0 { "below" } else { "above" }),
@@ -360,6 +368,8 @@ Mod+Shift+F fullscreen-window
 Mod+C center-column
 Mod+V toggle-window-floating
 Mod+Shift+V switch-focus-between-floating-and-tiling
+Mod+S toggle-scratchpad
+Mod+Shift+S move-window-to-scratchpad
 Mod+Page_Down focus-workspace-down
 Mod+Page_Up focus-workspace-up
 Mod+U focus-workspace-down
