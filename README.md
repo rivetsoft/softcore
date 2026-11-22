@@ -43,7 +43,7 @@ and anything it draws itself goes through them:
   couldn't be read) are egui in that theme.
 - **`rivet-kit`**: those panels are painted in memory by its software renderer, the way Rivet
   Shell paints its own.
-- **`rivet-xdg`**: where the settings live.
+- **`rivet-xdg`**: the user's folders.
 
 The crates are pinned to a commit in `Cargo.toml`. To build against a checkout of the apps
 repository instead, copy `.cargo/config.toml.example` to `.cargo/config.toml` and set the path.
@@ -55,33 +55,72 @@ teaching the shell is a matter of a new `Compositor::Softcore` that runs `softco
 
 ## Settings
 
-`~/.config/softcore/settings`, `key=value` lines like every Rivet app's. Unknown keys are
-skipped, lines that can't be read are listed in a panel, and the file is read again when it
-changes. `softcore validate` checks it without starting anything.
+One file, `~/.config/softcore/settings`, that you and a settings window both edit. It is
+`key=value` lines like every Rivet app's:
 
-| Key | What it sets |
-| --- | --- |
-| `gaps`, `gaps_out` | Between windows, and between windows and the screen's edges |
-| `border`, `radius` | The border's width, and its corner radius (empty: Rivet's) |
-| `border_active`, `border_inactive`, `background` | Colours as `#rrggbb` (empty: Rivet's) |
-| `inactive_opacity`, `shadows` | Unfocused windows' opacity (0.1–1), shadows on or off |
-| `column_widths`, `default_width` | The widths Mod+R steps through, and a new column's, as parts of the screen |
-| `theme`, `accent`, `follow_desktop_colors` | The Rivet look: `dark`, `light` or `system`; an accent; whether the desktop's colours win |
-| `mod` | `super`, `alt`, or `auto` |
-| `xkb_layout`, `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate` | The keyboard |
-| `tap_to_click`, `natural_scroll` | Touchpads |
-| `cursor_theme`, `cursor_size` | The pointer |
-| `spawn=COMMAND` | Run at start (repeatable): `spawn=rivet-shell` |
-| `env=NAME=VALUE` | For everything Softcore starts (repeatable) |
-| `bind=KEYS ACTION` | A key binding (repeatable); replaces a default on the same keys |
-| `unbind=KEYS`, `default_binds=false` | Drop one default, or all of them |
-| `output=NAME …` | A display: `mode=2560x1440@59.951 scale=1.5 position=0,0`, or `off` |
-| `include=FILE` | Read another file here; later lines win |
+```
+# Look
+gaps=8
+border=3
+border_active=#e66100
 
-A binding is keys and an action: `bind=Mod+T spawn foot`. Put `allow-when-locked` before the
-action for keys that should work on the lock screen. The actions are named as niri names them
-(`focus-column-left`, `move-column-to-workspace 3`, `set-column-width +10%`, …);
-`src/config.rs` has the list, with the default bindings.
+# Keys
+bind.Mod+T=spawn foot
+bind.Mod+E=
+
+# Displays
+output.DP-5=mode=2560x1440@59.951 scale=1.5 position=0,0
+output.eDP-1=off
+
+spawn=rivet-shell
+env.MOZ_ENABLE_WAYLAND=1
+```
+
+What makes it work from both sides:
+
+- **Every plain setting is one key with one typed value**, listed with its type, range,
+  default, label and group in one table (`SETTINGS` in `crates/softcore-settings`). The reader
+  checks values against that table, and a window can draw its controls from it: a whole
+  number in a range is a slider, `true`/`false` a switch, a few words a menu, `#rrggbb` a
+  colour well. `softcore settings describe` prints the table as JSON.
+- **Things there are many of have a name in their key** (`bind.KEYS`, `output.NAME`,
+  `env.NAME`), so each is one line that can be found and changed. An empty binding
+  (`bind.Mod+E=`) takes a default away. `spawn` is a plain list, in order.
+- **A change touches one line.** The writer (`SettingsFile`) puts the new value where the
+  old one stood and leaves comments, blank lines, the order of things and keys it doesn't
+  know alone. So a file tidied by hand stays tidy after a window changes something, and the
+  window shows what was typed by hand.
+- **Order doesn't matter** between different keys, and an empty value means "follow": the
+  edges follow `gaps`, colours and the radius follow Rivet.
+- **Softcore reads the file again when it changes**, within two seconds, whoever changed it.
+
+```sh
+softcore settings                    # every setting and its value; a star marks ones in the file
+softcore settings set gaps 16        # checked first, then one line changed
+softcore settings set bind.Mod+T spawn kitty
+softcore settings unset gaps         # back to the default
+softcore validate                    # what couldn't be read, without starting anything
+```
+
+Lines that can't be read are listed in a panel on screen and the rest still applies; keys
+Softcore doesn't know are skipped, so a newer file still loads. `include=FILE` reads another
+file in place for those who split theirs up; a change made through `SettingsFile` always goes
+where it has the last word.
+
+The crate has no compositor or toolkit in it, so Rivet Shell's settings window can depend on
+it and edit this file directly, through the code that owns the format. That window isn't
+built yet.
+
+The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
+`border_inactive`, `inactive_opacity`, `shadows`, `column_widths`, `default_width`, `theme`,
+`accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
+`xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
+`natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
+
+A binding's value is an action, named as niri names them (`focus-column-left`,
+`move-column-to-workspace 3`, `set-column-width +10%`, …), with `allow-when-locked` before it
+for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
+in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
 
 ## Talking to it
 
@@ -126,7 +165,7 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
 ## Checks
 
 ```sh
-cargo test                      # the layout's rules, the settings reader, the bindings
+cargo test --workspace          # the layout's rules, the settings file both ways, the bindings
 softcore --headless --size 1600x900 --spawn rivet-terminal &
 softcore msg screenshot /tmp/softcore.png     # with SOFTCORE_SOCKET from its first lines
 wtype -M alt -k Return -m alt                 # keys, with WAYLAND_DISPLAY from its first lines

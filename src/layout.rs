@@ -25,26 +25,7 @@ impl Rect {
     }
 }
 
-/// What the settings give the layout.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Options {
-    /// Between windows.
-    pub gaps: i32,
-    /// Between windows and the edges of the screen.
-    pub gaps_out: i32,
-    /// The border's width, drawn outside the window.
-    pub border: i32,
-    /// Column widths that `switch-preset-column-width` steps through, as parts of the screen.
-    pub presets: Vec<f64>,
-    /// A new column's width.
-    pub default_width: f64,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5 }
-    }
-}
+pub use softcore_settings::{Dir, Options};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Column {
@@ -204,14 +185,6 @@ pub struct Tile {
     pub active: bool,
     pub floating: bool,
     pub fullscreen: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dir {
-    Left,
-    Right,
-    Up,
-    Down,
 }
 
 #[derive(Clone, Debug)]

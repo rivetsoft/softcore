@@ -2729,10 +2729,15 @@ dependencies = [
  "serde_json",
  "smithay",
  "smithay-drm-extras",
+ "softcore-settings",
  "tracing",
  "tracing-subscriber",
  "xcursor",
 ]
+
+[[package]]
+name = "softcore-settings"
+version = "0.1.0"
 
 [[package]]
 name = "static_assertions"

@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+softcore-settings = { path = "crates/softcore-settings" }
 # The compositor toolkit. Pinned: smithay's API moves between commits.
 smithay = { git = "https://github.com/Smithay/smithay.git", rev = "a38bb709a0400759b6a4fab6129e0f1dd72808c3", default-features = false, features = [
     "backend_winit",
@@ -37,6 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 xcursor = "0.3"
+
+[workspace]
+members = ["crates/*"]
 
 [profile.dev.package."*"]
 opt-level = 2

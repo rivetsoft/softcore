@@ -41,7 +41,11 @@ pub struct Ui {
 }
 
 fn choice(c: &Config) -> Choice {
-    Choice { mode: c.theme, accent: c.accent, follow_desktop_colors: c.follow_desktop_colors, text_size: 0.0 }
+    Choice { mode: match c.theme {
+        crate::config::Theme::System => theme::Mode::System,
+        crate::config::Theme::Light => theme::Mode::Light,
+        crate::config::Theme::Dark => theme::Mode::Dark,
+    }, accent: c.accent, follow_desktop_colors: c.follow_desktop_colors, text_size: 0.0 }
 }
 
 fn rgb(c: Color32) -> [u8; 3] {

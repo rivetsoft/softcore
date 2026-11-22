@@ -1,0 +1,10 @@
+[package]
+name = "softcore-settings"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Softcore's settings file: what each key is, reading it, and changing one line without disturbing the rest"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

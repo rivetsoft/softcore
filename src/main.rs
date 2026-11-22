@@ -8,6 +8,7 @@ mod input;
 mod ipc;
 mod layout;
 mod render;
+mod settings_cli;
 mod state;
 mod udev;
 mod ui;
@@ -18,7 +19,6 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::wayland_server::Display;
 
-use crate::config::Config;
 use crate::state::State;
 
 const HELP: &str = "\
@@ -27,6 +27,7 @@ Softcore, the scrolling-tiling Wayland compositor for the Rivet desktop.
 Usage:
   softcore [OPTIONS]        Start Softcore
   softcore msg [-j] WORDS   Ask a running Softcore (softcore msg for the list)
+  softcore settings         Show or change settings (softcore settings help)
   softcore validate         Check the settings file and say what couldn't be read
 
 Options:
@@ -52,8 +53,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("msg") => std::process::exit(ipc::client(&args[1..])),
+        Some("settings") => std::process::exit(settings_cli::run(&args[1..])),
         Some("validate") => {
-            let c = Config::load();
+            let c = config::load();
             for e in &c.errors {
                 eprintln!("{e}");
             }
@@ -113,7 +115,7 @@ fn main() {
 
     let mut event_loop: EventLoop<'static, State> = EventLoop::try_new().unwrap_or_else(|e| fail(&format!("couldn't start: {e}")));
     let display: Display<State> = Display::new().unwrap_or_else(|e| fail(&format!("couldn't start: {e}")));
-    let config = Config::load();
+    let config = config::load();
     let mut state = State::new(display, event_loop.handle(), event_loop.get_signal(), !matches!(place, Where::Tty), config);
 
     let started = match place {

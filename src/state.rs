@@ -578,7 +578,7 @@ impl State {
     }
 
     pub fn reload_config(&mut self) {
-        let new = Config::load();
+        let new = crate::config::load();
         let old = std::mem::replace(&mut self.config, new);
         self.layout.set_options(self.config.layout.clone());
         if let Some(k) = self.seat.get_keyboard() {
