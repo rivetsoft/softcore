@@ -1,0 +1,50 @@
+[package]
+name = "softcore"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Softcore, the scrolling-tiling Wayland compositor for the Rivet desktop"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The compositor toolkit. Pinned: smithay's API moves between commits.
+smithay = { git = "https://github.com/Smithay/smithay.git", rev = "a38bb709a0400759b6a4fab6129e0f1dd72808c3", default-features = false, features = [
+    "backend_winit",
+    "backend_udev",
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_session_libseat",
+    "backend_egl",
+    "renderer_gl",
+    "wayland_frontend",
+    "desktop",
+] }
+smithay-drm-extras = { git = "https://github.com/Smithay/smithay.git", rev = "a38bb709a0400759b6a4fab6129e0f1dd72808c3" }
+
+# Rivet's shared crates (github.com/rivetsoft/apps). Anything Softcore draws itself goes
+# through these: colours, radii and fonts from rivet-look, egui painted in memory by rivet-kit.
+# To build against a local checkout instead, see .cargo/config.toml.example.
+rivet-look = { git = "https://github.com/rivetsoft/apps.git", rev = "bc584f2c0c933e41ef2902355fe7d3a35959fe77" }
+rivet-kit = { git = "https://github.com/rivetsoft/apps.git", rev = "bc584f2c0c933e41ef2902355fe7d3a35959fe77" }
+rivet-xdg = { git = "https://github.com/rivetsoft/apps.git", rev = "bc584f2c0c933e41ef2902355fe7d3a35959fe77" }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wayland"] }
+
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+xcursor = "0.3"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The software renderer that paints Softcore's own panels is slow unoptimised (the Rivet
+# workspace sets the same).
+[profile.dev.package.rivet-kit]
+opt-level = 3
+
+[profile.release]
+opt-level = 3

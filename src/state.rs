@@ -1,0 +1,734 @@
+//! Everything Softcore knows while it runs: the Wayland globals, the windows and where the
+//! layout puts them, the displays, who has the keyboard.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use smithay::backend::renderer::gles::element::PixelShaderElement;
+use smithay::desktop::space::SpaceElement;
+use smithay::desktop::{LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output};
+use smithay::input::keyboard::XkbConfig;
+use smithay::input::pointer::CursorImageStatus;
+use smithay::input::{Seat, SeatState};
+use smithay::output::Output;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Display, DisplayHandle};
+use smithay::utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Size};
+use smithay::wayland::compositor::{CompositorClientState, CompositorState, send_surface_state, with_states, with_surface_tree_downward, TraversalAction};
+use smithay::wayland::cursor_shape::CursorShapeManagerState;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
+use smithay::wayland::fractional_scale::{FractionalScaleManagerState, with_fractional_scale};
+use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
+use smithay::wayland::idle_notify::IdleNotifierState;
+use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState};
+use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer, WlrLayerShellState};
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+use smithay::wayland::shell::xdg::{SurfaceCachedState, XdgShellState, XdgToplevelSurfaceData};
+use smithay::wayland::shm::ShmState;
+use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
+use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xdg_activation::XdgActivationState;
+
+use crate::config::{Action, Config, ModKey, WidthChange};
+use crate::cursor::Cursors;
+use crate::ipc::Ipc;
+use crate::layout::{Layout, Rect, Tile, WinId};
+use crate::render::Shaders;
+use crate::ui::{Panel, Ui};
+
+/// What each client carries.
+#[derive(Default)]
+pub struct ClientState {
+    pub compositor_state: CompositorClientState,
+}
+
+impl ClientData for ClientState {
+    fn initialized(&self, _client_id: ClientId) {}
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// A window on screen.
+pub struct Win {
+    pub window: Window,
+    pub foreign: ForeignToplevelHandle,
+    /// The display it was last told it is on.
+    pub output: Option<String>,
+    /// Its border and shadow, kept from frame to frame so only changes are redrawn.
+    pub border: Option<(PixelShaderElement, BorderKey)>,
+    pub shadow: Option<(PixelShaderElement, Rect)>,
+    /// When it last had the focus, for `softcore msg windows`.
+    pub focused_at: Duration,
+}
+
+/// What a border was last drawn with.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BorderKey {
+    pub rect: Rect,
+    pub color: [u8; 3],
+    pub width: i32,
+    pub radius: i32,
+}
+
+#[derive(Default)]
+pub struct Lock {
+    pub locked: bool,
+    pub surfaces: Vec<(Output, LockSurface)>,
+}
+
+pub struct State {
+    pub start: Instant,
+    pub dh: DisplayHandle,
+    pub signal: LoopSignal,
+    pub socket: String,
+    /// In a window of another desktop (or with no screen at all), not on a display of its own.
+    pub nested: bool,
+
+    pub config: Config,
+    pub layout: Layout,
+    pub wins: HashMap<WinId, Win>,
+    /// Windows that haven't shown anything yet.
+    pub unmapped: Vec<Window>,
+    next_win: WinId,
+    pub outputs: Vec<Output>,
+    pub popups: PopupManager,
+
+    pub seat: Seat<State>,
+    /// In the space all displays share.
+    pub pointer_pos: Point<f64, Logical>,
+    pub cursor_status: CursorImageStatus,
+    pub cursors: Cursors,
+    /// Keys held down that started a binding: their release isn't the client's either.
+    pub suppressed_keys: Vec<u32>,
+    /// A panel or launcher that took the keyboard when clicked or opened.
+    pub layer_focus: Option<LayerSurface>,
+    pub lock: Lock,
+    pub monitors_off: bool,
+
+    pub backend: Option<crate::backend::Backend>,
+    pub ui: Ui,
+    pub shaders: Option<Shaders>,
+    pub redraw: bool,
+    /// Where the next frame drawn should also be saved.
+    pub screenshot: Option<PathBuf>,
+    pub ipc: Ipc,
+    last_frame: Instant,
+    pub animating: bool,
+
+    pub compositor_state: CompositorState,
+    pub xdg_shell_state: XdgShellState,
+    /// Held so the global stays up; nothing reads it.
+    pub _xdg_decoration_state: XdgDecorationState,
+    pub layer_shell_state: WlrLayerShellState,
+    pub shm_state: ShmState,
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: Option<DmabufGlobal>,
+    pub _output_manager_state: OutputManagerState,
+    pub seat_state: SeatState<State>,
+    pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    pub data_control_state: DataControlState,
+    pub session_lock_state: SessionLockManagerState,
+    pub foreign_toplevel_state: ForeignToplevelListState,
+    pub idle_notifier_state: IdleNotifierState<State>,
+    pub idle_inhibitors: Vec<WlSurface>,
+    pub xdg_activation_state: XdgActivationState,
+}
+
+impl State {
+    pub fn new(display: Display<State>, handle: LoopHandle<'static, State>, signal: LoopSignal, nested: bool, config: Config) -> State {
+        let dh = display.handle();
+
+        let source = ListeningSocketSource::new_auto().expect("couldn't open a Wayland socket");
+        let socket = source.socket_name().to_string_lossy().into_owned();
+        handle
+            .insert_source(source, |stream, _, state: &mut State| {
+                if let Err(e) = state.dh.insert_client(stream, Arc::new(ClientState::default())) {
+                    tracing::warn!("couldn't add a client: {e}");
+                }
+            })
+            .expect("couldn't listen on the Wayland socket");
+        handle
+            .insert_source(Generic::new(display, Interest::READ, Mode::Level), |_, display, state| {
+                // Safety: the display is never dropped while the loop runs.
+                unsafe {
+                    display.get_mut().dispatch_clients(state).unwrap();
+                }
+                Ok(PostAction::Continue)
+            })
+            .expect("couldn't watch the Wayland display");
+
+        let compositor_state = CompositorState::new::<State>(&dh);
+        let xdg_shell_state = XdgShellState::new::<State>(&dh);
+        let xdg_decoration_state = XdgDecorationState::new::<State>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<State>(&dh);
+        let shm_state = ShmState::new::<State>(&dh, vec![]);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<State>(&dh);
+        let data_device_state = DataDeviceState::new::<State>(&dh);
+        let primary_selection_state = PrimarySelectionState::new::<State>(&dh);
+        let data_control_state = DataControlState::new::<State, _>(&dh, Some(&primary_selection_state), |_| true);
+        let session_lock_state = SessionLockManagerState::new::<State, _>(&dh, |_| true);
+        let foreign_toplevel_state = ForeignToplevelListState::new::<State>(&dh);
+        let idle_notifier_state = IdleNotifierState::new(&dh, handle.clone());
+        let xdg_activation_state = XdgActivationState::new::<State>(&dh);
+        ViewporterState::new::<State>(&dh);
+        FractionalScaleManagerState::new::<State>(&dh);
+        SinglePixelBufferState::new::<State>(&dh);
+        CursorShapeManagerState::new::<State>(&dh);
+        IdleInhibitManagerState::new::<State>(&dh);
+
+        let mut seat_state = SeatState::new();
+        let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+        let xkb = XkbConfig { layout: &config.xkb_layout, variant: &config.xkb_variant, options: (!config.xkb_options.is_empty()).then(|| config.xkb_options.clone()), ..Default::default() };
+        if seat.add_keyboard(xkb, config.repeat_delay, config.repeat_rate).is_err() {
+            seat.add_keyboard(XkbConfig::default(), config.repeat_delay, config.repeat_rate).expect("no keyboard layout could be loaded");
+        }
+        seat.add_pointer();
+
+        let layout = Layout::new(config.layout.clone());
+        let cursors = Cursors::new(&config.cursor_theme, config.cursor_size);
+        let ipc = Ipc::start(&handle, &socket);
+
+        State {
+            start: Instant::now(),
+            dh,
+            signal,
+            socket,
+            nested,
+            layout,
+            wins: HashMap::new(),
+            unmapped: Vec::new(),
+            next_win: 1,
+            outputs: Vec::new(),
+            popups: PopupManager::default(),
+            seat,
+            pointer_pos: (0.0, 0.0).into(),
+            cursor_status: CursorImageStatus::default_named(),
+            cursors,
+            suppressed_keys: Vec::new(),
+            layer_focus: None,
+            lock: Lock::default(),
+            monitors_off: false,
+            backend: None,
+            ui: Ui::new(),
+            shaders: None,
+            redraw: true,
+            screenshot: None,
+            ipc,
+            last_frame: Instant::now(),
+            animating: false,
+            config,
+            compositor_state,
+            xdg_shell_state,
+            _xdg_decoration_state: xdg_decoration_state,
+            layer_shell_state,
+            shm_state,
+            dmabuf_state: DmabufState::new(),
+            dmabuf_global: None,
+            _output_manager_state: output_manager_state,
+            seat_state,
+            data_device_state,
+            primary_selection_state,
+            data_control_state,
+            session_lock_state,
+            foreign_toplevel_state,
+            idle_notifier_state,
+            idle_inhibitors: Vec::new(),
+            xdg_activation_state,
+        }
+    }
+
+    pub fn queue_redraw(&mut self) {
+        self.redraw = true;
+    }
+
+    /// Whether Mod is Alt (in a window of another desktop) or Super.
+    pub fn mod_is_alt(&self) -> bool {
+        match self.config.mod_key {
+            ModKey::Alt => true,
+            ModKey::Super => false,
+            ModKey::Auto => self.nested,
+        }
+    }
+
+    // ---- displays ----
+
+    pub fn output_size(output: &Output) -> Size<i32, Logical> {
+        let Some(mode) = output.current_mode() else { return (0, 0).into() };
+        let size = output.current_transform().transform_size(mode.size);
+        size.to_f64().to_logical(output.current_scale().fractional_scale()).to_i32_round()
+    }
+
+    pub fn output_geometry(output: &Output) -> Rectangle<i32, Logical> {
+        Rectangle::new(output.current_location(), Self::output_size(output))
+    }
+
+    pub fn add_output(&mut self, output: Output) {
+        let rule = self.config.outputs.iter().find(|r| r.name == output.name()).cloned();
+        let x = self.outputs.iter().map(|o| Self::output_geometry(o)).map(|g| g.loc.x + g.size.w).max().unwrap_or(0);
+        let loc = rule.as_ref().and_then(|r| r.position).unwrap_or((x, 0));
+        let scale = rule.as_ref().and_then(|r| r.scale).map(smithay::output::Scale::Fractional);
+        output.change_current_state(None, None, scale, Some(loc.into()));
+        let size = Self::output_size(&output);
+        self.layout.add_monitor(&output.name(), (size.w, size.h));
+        if self.outputs.is_empty() {
+            self.pointer_pos = (loc.0 as f64 + size.w as f64 / 2.0, loc.1 as f64 + size.h as f64 / 2.0).into();
+        }
+        self.outputs.push(output);
+        self.update_areas();
+        self.queue_redraw();
+    }
+
+    pub fn remove_output(&mut self, output: &Output) {
+        self.outputs.retain(|o| o != output);
+        self.layout.remove_monitor(&output.name());
+        self.lock.surfaces.retain(|(o, _)| o != output);
+        self.queue_redraw();
+    }
+
+    /// A display changed size (or scale): the layout and the panels follow.
+    pub fn output_resized(&mut self, output: &Output) {
+        layer_map_for_output(output).arrange();
+        for (o, s) in &self.lock.surfaces {
+            if o == output {
+                let size = Self::output_size(output);
+                s.with_pending_state(|st| st.size = Some((size.w as u32, size.h as u32).into()));
+                s.send_configure();
+            }
+        }
+        self.update_areas();
+        self.queue_redraw();
+    }
+
+    pub fn output_named(&self, name: &str) -> Option<&Output> {
+        self.outputs.iter().find(|o| o.name() == name)
+    }
+
+    /// The display with the focus.
+    pub fn active_output(&self) -> Option<&Output> {
+        self.layout.active_monitor().and_then(|m| self.output_named(&m.name)).or(self.outputs.first())
+    }
+
+    pub fn output_at(&self, pos: Point<f64, Logical>) -> Option<&Output> {
+        self.outputs.iter().find(|o| Self::output_geometry(o).to_f64().contains(pos))
+    }
+
+    /// Tell the layout what room the panels leave on each display.
+    pub fn update_areas(&mut self) {
+        for o in &self.outputs {
+            let size = Self::output_size(o);
+            let zone = layer_map_for_output(o).non_exclusive_zone();
+            if self.layout.set_geometry(&o.name(), (size.w, size.h), Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h)) {
+                self.redraw = true;
+            }
+        }
+    }
+
+    // ---- windows ----
+
+    pub fn win_for_surface(&self, surface: &WlSurface) -> Option<WinId> {
+        self.wins.iter().find(|(_, w)| w.window.toplevel().is_some_and(|t| t.wl_surface() == surface)).map(|(id, _)| *id)
+    }
+
+    /// The size a floating window has chosen.
+    pub fn float_size(&self) -> impl Fn(WinId) -> (i32, i32) + '_ {
+        |id| self.wins.get(&id).map(|w| w.window.geometry().size).map(|s| (s.w.max(1), s.h.max(1))).unwrap_or((1, 1))
+    }
+
+    /// Dialogs and windows that can't be resized float over the columns.
+    pub fn wants_floating(window: &Window) -> bool {
+        let Some(top) = window.toplevel() else { return false };
+        if top.parent().is_some() {
+            return true;
+        }
+        with_states(top.wl_surface(), |states| {
+            let mut guard = states.cached_state.get::<SurfaceCachedState>();
+            let s = guard.current();
+            s.min_size.w > 0 && s.min_size.h > 0 && s.min_size == s.max_size
+        })
+    }
+
+    pub fn title_and_app_id(window: &Window) -> (String, String) {
+        let Some(top) = window.toplevel() else { return Default::default() };
+        with_states(top.wl_surface(), |states| {
+            let data = states.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap();
+            (data.title.clone().unwrap_or_default(), data.app_id.clone().unwrap_or_default())
+        })
+    }
+
+    /// A window has drawn its first frame: into the layout it goes.
+    pub fn map_window(&mut self, window: Window) {
+        let id = self.next_win;
+        self.next_win += 1;
+        let (title, app_id) = Self::title_and_app_id(&window);
+        let foreign = self.foreign_toplevel_state.new_toplevel::<State>(&title, &app_id);
+        let floating = Self::wants_floating(&window);
+        self.wins.insert(id, Win { window, foreign, output: None, border: None, shadow: None, focused_at: self.start.elapsed() });
+        self.layout.add_window(id, floating, None);
+        self.layer_focus = None;
+        self.queue_redraw();
+    }
+
+    pub fn unmap_window(&mut self, id: WinId) -> Option<Window> {
+        let win = self.wins.remove(&id)?;
+        self.layout.remove_window(id);
+        self.foreign_toplevel_state.remove_toplevel(&win.foreign);
+        for o in &self.outputs {
+            win.window.output_leave(o);
+        }
+        self.queue_redraw();
+        Some(win.window)
+    }
+
+    /// The windows on a display now, bottom first.
+    pub fn tiles(&self, output: &Output) -> Vec<Tile> {
+        match self.layout.monitor(&output.name()) {
+            Some(m) => self.layout.tiles(m, &self.float_size()),
+            None => Vec::new(),
+        }
+    }
+
+    /// Tell every window its size and whether it is the active one, and which display it is on.
+    fn sync_windows(&mut self) {
+        let active = self.layout.active_window();
+        for mi in 0..self.layout.mons.len() {
+            let name = self.layout.mons[mi].name.clone();
+            let Some(output) = self.output_named(&name).cloned() else { continue };
+            let sizes = self.layout.sizes(mi, &self.float_size());
+            for t in sizes {
+                let Some(win) = self.wins.get_mut(&t.id) else { continue };
+                let Some(top) = win.window.toplevel() else { continue };
+                top.with_pending_state(|s| {
+                    s.size = (!t.floating).then(|| (t.rect.w, t.rect.h).into());
+                    for st in [xdg_toplevel::State::TiledLeft, xdg_toplevel::State::TiledRight, xdg_toplevel::State::TiledTop, xdg_toplevel::State::TiledBottom] {
+                        if t.floating {
+                            s.states.unset(st);
+                        } else {
+                            s.states.set(st);
+                        }
+                    }
+                    if t.fullscreen {
+                        s.states.set(xdg_toplevel::State::Fullscreen);
+                    } else {
+                        s.states.unset(xdg_toplevel::State::Fullscreen);
+                    }
+                    if active == Some(t.id) {
+                        s.states.set(xdg_toplevel::State::Activated);
+                    } else {
+                        s.states.unset(xdg_toplevel::State::Activated);
+                    }
+                });
+                if top.is_initial_configure_sent() {
+                    top.send_pending_configure();
+                }
+                if win.output.as_deref() != Some(name.as_str()) {
+                    for o in &self.outputs {
+                        if *o != output {
+                            win.window.output_leave(o);
+                        }
+                    }
+                    win.window.output_enter(&output, Rectangle::from_size((i32::MAX, i32::MAX).into()));
+                    win.output = Some(name.clone());
+                    send_scale(win.window.toplevel().unwrap().wl_surface(), &output);
+                }
+            }
+        }
+    }
+
+    // ---- who has the keyboard ----
+
+    fn focus_target(&self) -> Option<WlSurface> {
+        if self.lock.locked {
+            let on = self.active_output();
+            return self.lock.surfaces.iter().find(|(o, _)| Some(o) == on).or(self.lock.surfaces.first()).map(|(_, s)| s.wl_surface().clone());
+        }
+        if self.ui.panel != Panel::None {
+            return None;
+        }
+        // A launcher or menu that asks for every key gets them, wherever the pointer is.
+        for o in &self.outputs {
+            let map = layer_map_for_output(o);
+            for layer in [Layer::Overlay, Layer::Top] {
+                if let Some(l) = map.layers_on(layer).rev().find(|l| l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive) {
+                    return Some(l.wl_surface().clone());
+                }
+            }
+        }
+        if let Some(l) = &self.layer_focus {
+            return Some(l.wl_surface().clone());
+        }
+        let id = self.layout.active_window()?;
+        self.wins.get(&id).and_then(|w| w.window.toplevel()).map(|t| t.wl_surface().clone())
+    }
+
+    pub fn update_focus(&mut self) {
+        if self.layer_focus.as_ref().is_some_and(|l| !l.alive() || l.cached_state().keyboard_interactivity == KeyboardInteractivity::None) {
+            self.layer_focus = None;
+        }
+        let target = self.focus_target();
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        if keyboard.current_focus() != target {
+            keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+            if let Some(id) = self.layout.active_window() {
+                let now = self.start.elapsed();
+                if let Some(w) = self.wins.get_mut(&id) {
+                    w.focused_at = now;
+                }
+            }
+        }
+    }
+
+    // ---- once round the loop ----
+
+    /// After every batch of events: drop what has gone, and bring windows, focus and anyone
+    /// listening up to date.
+    pub fn refresh(&mut self) {
+        let dead: Vec<WinId> = self.wins.iter().filter(|(_, w)| !w.window.alive()).map(|(id, _)| *id).collect();
+        for id in dead {
+            self.unmap_window(id);
+        }
+        self.unmapped.retain(|w| w.alive());
+        self.lock.surfaces.retain(|(_, s)| s.alive());
+        self.popups.cleanup();
+        for o in &self.outputs {
+            layer_map_for_output(o).cleanup();
+        }
+        self.foreign_toplevel_state.cleanup_closed_handles();
+        self.update_areas();
+        self.sync_windows();
+        self.update_focus();
+        crate::ipc::notify(self);
+        let _ = self.dh.flush_clients();
+    }
+
+    /// Move the layout's slides on; true when a frame should be drawn.
+    pub fn advance(&mut self) -> bool {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f64().min(0.1);
+        self.last_frame = now;
+        let moving = self.layout.advance(dt);
+        let was = std::mem::replace(&mut self.animating, moving);
+        let wanted = std::mem::take(&mut self.redraw);
+        wanted || moving || was
+    }
+
+    /// Every two seconds, like the Rivet apps: the settings and the desktop's colours.
+    pub fn check_files(&mut self) {
+        if self.config.changed_on_disk() {
+            self.reload_config();
+        }
+        if self.ui.check_look() {
+            self.queue_redraw();
+        }
+    }
+
+    pub fn reload_config(&mut self) {
+        let new = Config::load();
+        let old = std::mem::replace(&mut self.config, new);
+        self.layout.set_options(self.config.layout.clone());
+        if let Some(k) = self.seat.get_keyboard() {
+            if (&old.xkb_layout, &old.xkb_variant, &old.xkb_options) != (&self.config.xkb_layout, &self.config.xkb_variant, &self.config.xkb_options) {
+                let c = self.config.clone();
+                let xkb = XkbConfig { layout: &c.xkb_layout, variant: &c.xkb_variant, options: (!c.xkb_options.is_empty()).then(|| c.xkb_options.clone()), ..Default::default() };
+                if k.set_xkb_config(self, xkb).is_err() {
+                    self.config.errors.push("the keyboard layout couldn't be loaded".into());
+                }
+            }
+            k.change_repeat_info(self.config.repeat_rate, self.config.repeat_delay);
+        }
+        if (&old.cursor_theme, old.cursor_size) != (&self.config.cursor_theme, self.config.cursor_size) {
+            self.cursors = Cursors::new(&self.config.cursor_theme, self.config.cursor_size);
+        }
+        for o in self.outputs.clone() {
+            if let Some(r) = self.config.outputs.iter().find(|r| r.name == o.name()).cloned() {
+                o.change_current_state(None, None, r.scale.map(smithay::output::Scale::Fractional), r.position.map(Into::into));
+                self.output_resized(&o);
+            }
+        }
+        self.ui.settings_changed(&self.config);
+        if !self.config.errors.is_empty() {
+            self.ui.show(Panel::Errors);
+        } else if self.ui.panel == Panel::Errors {
+            self.ui.show(Panel::None);
+        }
+        self.queue_redraw();
+    }
+
+    // ---- actions ----
+
+    pub fn spawn(&self, command: &str) {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(command);
+        c.env("WAYLAND_DISPLAY", &self.socket).env("SOFTCORE_SOCKET", self.ipc.path()).env("XDG_CURRENT_DESKTOP", "softcore").env("XDG_SESSION_DESKTOP", "softcore").env("XDG_SESSION_TYPE", "wayland");
+        // In a window of another desktop, its own sockets would send clients' questions there.
+        for k in ["NIRI_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "DISPLAY"] {
+            c.env_remove(k);
+        }
+        for (k, v) in &self.config.env {
+            c.env(k, v);
+        }
+        c.stdin(std::process::Stdio::null());
+        if let Err(e) = c.spawn() {
+            tracing::warn!("couldn't run {command:?}: {e}");
+        }
+    }
+
+    pub fn do_action(&mut self, action: Action) {
+        use crate::layout::Dir;
+        let active = self.layout.active_window();
+        match action {
+            Action::Spawn(c) => self.spawn(&c),
+            Action::Quit { confirm: true } => self.ui.show(Panel::Quit),
+            Action::Quit { confirm: false } => self.signal.stop(),
+            Action::CloseWindow => {
+                if let Some(top) = active.and_then(|id| self.wins.get(&id)).and_then(|w| w.window.toplevel()) {
+                    top.send_close();
+                }
+            }
+            Action::Focus(d) => self.layout.focus(d),
+            Action::FocusColumnFirst => self.layout.focus_column_edge(false),
+            Action::FocusColumnLast => self.layout.focus_column_edge(true),
+            Action::MoveColumn(d) => self.layout.move_column(d),
+            Action::ConsumeOrExpel(d) => self.layout.consume_or_expel(if d == Dir::Left { Dir::Left } else { Dir::Right }),
+            Action::SwitchPresetWidth => self.layout.switch_preset_width(),
+            Action::SetColumnWidth(WidthChange::By(b)) => self.layout.change_width(b),
+            Action::SetColumnWidth(WidthChange::To(w)) => self.layout.set_width(w),
+            Action::MaximizeColumn => self.layout.toggle_maximized(),
+            Action::FullscreenWindow => {
+                if let Some(id) = active {
+                    self.layout.set_fullscreen(id, None);
+                }
+            }
+            Action::CenterColumn => self.layout.center_column(),
+            Action::ToggleFloating => {
+                if let Some(id) = active {
+                    self.layout.toggle_floating(id);
+                }
+            }
+            Action::SwitchFloatingFocus => self.layout.switch_floating_focus(),
+            Action::FocusWorkspace(i) => self.layout.focus_workspace(i),
+            Action::FocusWorkspaceBy(b) => self.layout.focus_workspace_by(b),
+            Action::MoveToWorkspace { idx, column } => self.layout.move_to_workspace(idx, column),
+            Action::MoveToWorkspaceBy { by, column } => self.layout.move_to_workspace_by(by, column),
+            Action::FocusMonitor(b) => {
+                if self.layout.focus_monitor(b) {
+                    self.warp_pointer_to_active_output();
+                }
+            }
+            Action::MoveColumnToMonitor(b) => self.layout.move_column_to_monitor(b),
+            Action::ShowHotkeyOverlay => self.ui.show(if self.ui.panel == Panel::Keys { Panel::None } else { Panel::Keys }),
+            Action::PowerOffMonitors => self.monitors_off = true,
+            Action::PowerOnMonitors => self.monitors_off = false,
+            Action::ReloadConfig => self.reload_config(),
+            Action::ChangeVt(n) => {
+                if let Some(b) = self.backend.as_mut() {
+                    b.change_vt(n);
+                }
+            }
+            Action::Screenshot(path) => {
+                let path = path.map(PathBuf::from).unwrap_or_else(|| {
+                    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                    rivet_xdg::places::home().join(format!("Pictures/Screenshots/softcore-{secs}.png"))
+                });
+                self.screenshot = Some(path);
+            }
+        }
+        self.layer_focus = None;
+        self.queue_redraw();
+    }
+
+    fn warp_pointer_to_active_output(&mut self) {
+        if let Some(g) = self.active_output().map(Self::output_geometry) {
+            self.pointer_pos = (g.loc.x as f64 + g.size.w as f64 / 2.0, g.loc.y as f64 + g.size.h as f64 / 2.0).into();
+        }
+    }
+
+    // ---- what is under the pointer ----
+
+    /// The surface at a point, and where that surface's corner is.
+    pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let output = self.output_at(pos)?;
+        let origin = Self::output_geometry(output).loc.to_f64();
+        let local = pos - origin;
+        if self.lock.locked {
+            return self.lock.surfaces.iter().find(|(o, _)| o == output).map(|(_, s)| (s.wl_surface().clone(), origin));
+        }
+        let map = layer_map_for_output(output);
+        let layer_under = |layer: Layer| {
+            let l = map.layer_under(layer, local)?;
+            let geo = map.layer_geometry(l)?;
+            l.surface_under(local - geo.loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + geo.loc).to_f64() + origin))
+        };
+        let tiles = self.tiles(output);
+        let window_under = |fullscreen: bool| {
+            tiles.iter().rev().filter(|t| t.fullscreen == fullscreen).find_map(|t| {
+                let w = &self.wins.get(&t.id)?.window;
+                let loc = Point::<i32, Logical>::from((t.rect.x, t.rect.y)) - w.geometry().loc;
+                w.surface_under(local - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + loc).to_f64() + origin))
+            })
+        };
+        layer_under(Layer::Overlay)
+            .or_else(|| window_under(true))
+            .or_else(|| layer_under(Layer::Top))
+            .or_else(|| window_under(false))
+            .or_else(|| layer_under(Layer::Bottom))
+            .or_else(|| layer_under(Layer::Background))
+    }
+
+    /// The window at a point (its popups count as the window).
+    pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<WinId> {
+        let (surface, _) = self.surface_under(pos)?;
+        let root = root_surface(&surface);
+        self.win_for_surface(&root).or_else(|| {
+            // A popup: find the window it belongs to.
+            let popup = self.popups.find_popup(&root)?;
+            let parent = smithay::desktop::find_popup_root_surface(&popup).ok()?;
+            self.win_for_surface(&parent)
+        })
+    }
+
+    pub fn layer_under(&self, pos: Point<f64, Logical>) -> Option<LayerSurface> {
+        let (surface, _) = self.surface_under(pos)?;
+        let root = root_surface(&surface);
+        let root = match self.popups.find_popup(&root) {
+            Some(p) => smithay::desktop::find_popup_root_surface(&p).ok()?,
+            None => root,
+        };
+        self.outputs.iter().find_map(|o| layer_map_for_output(o).layer_for_surface(&root, WindowSurfaceType::TOPLEVEL).cloned())
+    }
+}
+
+pub fn root_surface(surface: &WlSurface) -> WlSurface {
+    let mut root = surface.clone();
+    while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+        root = parent;
+    }
+    root
+}
+
+/// Tell a surface and everything under it the scale of the display it is on.
+pub fn send_scale(surface: &WlSurface, output: &Output) {
+    let scale = output.current_scale();
+    let transform = output.current_transform();
+    with_surface_tree_downward(
+        surface,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |s, states, _| {
+            send_surface_state(s, states, scale.integer_scale(), transform);
+            with_fractional_scale(states, |f| f.set_preferred_scale(scale.fractional_scale()));
+        },
+        |_, _, _| true,
+    );
+}

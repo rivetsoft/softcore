@@ -1,0 +1,6 @@
+# Build against a checkout of github.com/rivetsoft/apps instead of the commit pinned in
+# Cargo.toml: copy this to .cargo/config.toml (which git ignores) and set the path.
+[patch."https://github.com/rivetsoft/apps.git"]
+rivet-look = { path = "/path/to/apps/crates/rivet-look" }
+rivet-kit = { path = "/path/to/apps/crates/rivet-kit" }
+rivet-xdg = { path = "/path/to/apps/crates/rivet-xdg" }
