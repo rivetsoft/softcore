@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::desktop::space::SpaceElement;
 use smithay::desktop::{LayerSurface, PopupManager, Window, WindowSurfaceType, layer_map_for_output};
 use smithay::input::keyboard::XkbConfig;
@@ -20,7 +19,7 @@ use smithay::reexports::wayland_server::backend::{ClientData, ClientId, Disconne
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Size};
-use smithay::wayland::compositor::{CompositorClientState, CompositorState, send_surface_state, with_states, with_surface_tree_downward, TraversalAction};
+use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, add_destruction_hook, add_pre_commit_hook, CompositorClientState, CompositorState, send_surface_state, with_states, with_surface_tree_downward, TraversalAction};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
@@ -59,26 +58,22 @@ impl ClientData for ClientState {
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
+/// Marks a surface whose commits are already watched for it leaving.
+struct Watched;
+
 /// A window on screen.
 pub struct Win {
     pub window: Window,
     pub foreign: ForeignToplevelHandle,
     /// The display it was last told it is on.
     pub output: Option<String>,
-    /// Its border and shadow, kept from frame to frame so only changes are redrawn.
-    pub border: Option<(PixelShaderElement, BorderKey)>,
-    pub shadow: Option<(PixelShaderElement, Rect)>,
+    pub deco: crate::render::Deco,
+    /// How far it has faded in since it appeared, from 0 to 1.
+    pub shown: f64,
+    /// Its last frame, taken as it leaves, to fade out with.
+    pub picture: Option<smithay::backend::renderer::gles::GlesTexture>,
     /// When it last had the focus, for `softcore msg windows`.
     pub focused_at: Duration,
-}
-
-/// What a border was last drawn with.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct BorderKey {
-    pub rect: Rect,
-    pub color: [u8; 3],
-    pub width: i32,
-    pub radius: i32,
 }
 
 #[derive(Default)]
@@ -127,6 +122,8 @@ pub struct State {
     pub screenshot: Option<PathBuf>,
     pub ipc: Ipc,
     pub captures: crate::capture::Captures,
+    /// Windows that have closed and are fading out.
+    pub closing: Vec<crate::render::Closing>,
     pub casts: crate::cast::Casts,
     /// The question of what to share, while it is being asked.
     pub picker: Option<crate::picker::Picker>,
@@ -243,6 +240,7 @@ impl State {
             screenshot: None,
             ipc,
             captures: Default::default(),
+            closing: Vec::new(),
             casts: Default::default(),
             picker: None,
             output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState::new::<State>(&dh2),
@@ -396,13 +394,32 @@ impl State {
         let (title, app_id) = Self::title_and_app_id(&window);
         let foreign = self.foreign_toplevel_state.new_toplevel::<State>(&title, &app_id);
         let floating = Self::wants_floating(&window);
-        self.wins.insert(id, Win { window, foreign, output: None, border: None, shadow: None, focused_at: self.start.elapsed() });
+        if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone())
+            && with_states(&surface, |s| s.data_map.insert_if_missing(|| Watched))
+        {
+            // Its picture is needed after it has gone, to fade out with, and has to be taken
+            // while there still is one: before a commit that takes the frame away, and
+            // before the surface goes.
+            add_pre_commit_hook::<State, _>(&surface, |state, _, surface| {
+                let leaving = with_states(surface, |s| matches!(s.cached_state.get::<SurfaceAttributes>().pending().buffer, Some(BufferAssignment::Removed)));
+                if leaving && let Some(id) = state.win_for_surface(surface) {
+                    crate::render::remember(state, id);
+                }
+            });
+            add_destruction_hook::<State, _>(&surface, |state, surface| {
+                if let Some(id) = state.win_for_surface(surface) {
+                    crate::render::remember(state, id);
+                }
+            });
+        }
+        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, focused_at: self.start.elapsed() });
         self.layout.add_window(id, floating, None);
         self.layer_focus = None;
         self.queue_redraw();
     }
 
     pub fn unmap_window(&mut self, id: WinId) -> Option<Window> {
+        crate::render::start_closing(self, id);
         let win = self.wins.remove(&id)?;
         self.layout.remove_window(id);
         self.foreign_toplevel_state.remove_toplevel(&win.foreign);
@@ -562,12 +579,23 @@ impl State {
         let _ = self.dh.flush_clients();
     }
 
-    /// Move the layout's slides on; true when a frame should be drawn.
+    /// Move everything that is sliding or fading on; true when a frame should be drawn.
     pub fn advance(&mut self) -> bool {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f64().min(0.1);
         self.last_frame = now;
-        let moving = self.layout.advance(dt);
+        let mut moving = self.layout.advance(dt);
+        // Windows fading in, and out.
+        let step = if self.config.animations { dt * self.config.animation_speed / 0.2 } else { 1.0 };
+        for w in self.wins.values_mut().filter(|w| w.shown < 1.0) {
+            w.shown = (w.shown + step).min(1.0);
+            moving = true;
+        }
+        moving |= !self.closing.is_empty();
+        self.closing.retain_mut(|c| {
+            c.t += step;
+            c.t < 1.0
+        });
         let was = std::mem::replace(&mut self.animating, moving);
         let wanted = std::mem::take(&mut self.redraw);
         wanted || moving || was

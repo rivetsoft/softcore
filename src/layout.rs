@@ -5,6 +5,8 @@
 //! logical pixels, and the compositor asks for `tiles()` each frame. That keeps every rule of
 //! the layout testable without a screen.
 
+use std::collections::HashMap;
+
 pub type WinId = u32;
 
 /// A rectangle in a display's logical pixels.
@@ -185,6 +187,8 @@ pub struct Tile {
     pub active: bool,
     pub floating: bool,
     pub fullscreen: bool,
+    /// On its way to its place: drawn at this size whatever size the window itself has.
+    pub moving: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -193,11 +197,15 @@ pub struct Layout {
     pub active_mon: usize,
     pub opts: Options,
     next_ws: u64,
+    /// Where each tiled window stood on its strip after the last change, and its workspace.
+    places: HashMap<WinId, (u64, Rect)>,
+    /// How far each window still is from its place (x, y, width, height), shrinking to nothing.
+    offsets: HashMap<WinId, [f64; 4]>,
 }
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1 }
+        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new() }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -678,6 +686,38 @@ impl Layout {
         if self.active_mon >= self.mons.len() {
             self.active_mon = 0;
         }
+        self.note_places();
+    }
+
+    /// See where every tiled window stands on its strip now. One that stood elsewhere on the
+    /// same strip starts from there and slides over, rather than jumping.
+    fn note_places(&mut self) {
+        let mut now = HashMap::new();
+        let mut tiles = Vec::new();
+        for m in &self.mons {
+            for ws in &m.wss {
+                tiles.clear();
+                self.ws_tiles(m, ws, false, &|_| (1, 1), None, &mut tiles);
+                now.extend(tiles.iter().filter(|t| !t.floating && !t.fullscreen).map(|t| (t.id, (ws.id, t.rect))));
+            }
+        }
+        self.offsets.retain(|id, _| now.contains_key(id));
+        if self.opts.animation_speed > 0.0 {
+            for (id, (ws, to)) in &now {
+                if let Some((was_ws, from)) = self.places.get(id)
+                    && was_ws == ws
+                    && from != to
+                {
+                    let o = self.offsets.entry(*id).or_insert([0.0; 4]);
+                    for (o, d) in o.iter_mut().zip([from.x - to.x, from.y - to.y, from.w - to.w, from.h - to.h]) {
+                        *o += d as f64;
+                    }
+                }
+            }
+        } else {
+            self.offsets.clear();
+        }
+        self.places = now;
     }
 
     pub fn set_options(&mut self, opts: Options) {
@@ -690,8 +730,17 @@ impl Layout {
     /// Move what is sliding (the strips, the workspaces) by `dt` seconds. True while anything
     /// still has somewhere to go.
     pub fn advance(&mut self, dt: f64) -> bool {
-        let k = 1.0 - (-dt * 16.0).exp();
+        // With animations off everything is where it is going at once.
+        let speed = self.opts.animation_speed;
+        let k = if speed > 0.0 { 1.0 - (-dt * 16.0 * speed).exp() } else { 1.0 };
         let mut moving = false;
+        self.offsets.retain(|_, o| {
+            for v in o.iter_mut() {
+                *v *= 1.0 - k;
+            }
+            o.iter().any(|v| v.abs() >= 0.5)
+        });
+        moving |= !self.offsets.is_empty();
         let mut ease = |v: &mut f64, to: f64| {
             if (*v - to).abs() < 0.5 {
                 if *v != to {
@@ -718,6 +767,7 @@ impl Layout {
     /// Jump to where everything is heading.
     #[cfg(test)]
     pub fn finish_animations(&mut self) {
+        self.offsets.clear();
         for m in &mut self.mons {
             m.pos = m.active as f64;
             for ws in &mut m.wss {
@@ -728,10 +778,13 @@ impl Layout {
 
     // ---- where things are ----
 
-    fn ws_tiles(&self, m: &Monitor, ws: &Workspace, focused: bool, float_size: &dyn Fn(WinId) -> (i32, i32), scrolled: bool, out: &mut Vec<Tile>) {
+    /// `view`: how far the strip is scrolled, as drawn now (windows still sliding are where
+    /// they have got to). None: where every window stands on the strip itself, at rest.
+    fn ws_tiles(&self, m: &Monitor, ws: &Workspace, focused: bool, float_size: &dyn Fn(WinId) -> (i32, i32), view: Option<f64>, out: &mut Vec<Tile>) {
         let o = &self.opts;
         let area = &m.area;
-        let view = if scrolled { ws.view } else { ws.view_to };
+        let sliding = view.is_some();
+        let view = view.unwrap_or(0.0);
         let b = o.border;
         for (ci, col) in ws.cols.iter().enumerate() {
             let w = ws.col_width(ci, area, o);
@@ -744,9 +797,13 @@ impl Layout {
                 // The last one takes the pixels the division left over.
                 let h = if ri as i32 == n - 1 { room - h * (n - 1) } else { h };
                 let active = focused && ws.float_focus.is_none() && ci == ws.active && ri == col.active;
-                let rect = Rect::new(x + b, y + b, (w - 2 * b).max(1), (h - 2 * b).max(1));
+                let mut rect = Rect::new(x + b, y + b, (w - 2 * b).max(1), (h - 2 * b).max(1));
+                let off = self.offsets.get(id).filter(|_| sliding);
+                if let Some(o) = off {
+                    rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
+                }
                 if ws.fullscreen != Some(*id) {
-                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false });
+                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some() });
                 }
             }
         }
@@ -755,11 +812,11 @@ impl Layout {
             let (w, h) = (w.clamp(1, area.w.max(1)), h.clamp(1, area.h.max(1)));
             let rect = Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h);
             if ws.fullscreen != Some(*id) {
-                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false });
+                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false });
             }
         }
         if let Some(id) = ws.fullscreen {
-            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true });
+            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false });
         }
     }
 
@@ -776,7 +833,7 @@ impl Layout {
             }
             let dy = (off * m.size.1 as f64).round() as i32;
             let start = out.len();
-            self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, true, &mut out);
+            self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, Some(ws.view), &mut out);
             for t in &mut out[start..] {
                 t.rect.y += dy;
             }
@@ -790,7 +847,14 @@ impl Layout {
         let Some(m) = self.mons.get(mon) else { return Vec::new() };
         let mut out = Vec::new();
         for (wi, ws) in m.wss.iter().enumerate() {
-            self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, false, &mut out);
+            let start = out.len();
+            self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, None, &mut out);
+            // Not that it matters to a size, but as it was: where the strip is heading.
+            for t in &mut out[start..] {
+                if !t.floating && !t.fullscreen {
+                    t.rect.x -= ws.view_to.round() as i32;
+                }
+            }
         }
         out
     }
@@ -817,6 +881,33 @@ mod tests {
 
     fn fs(_: WinId) -> (i32, i32) {
         (300, 200)
+    }
+
+    #[test]
+    fn windows_slide_to_their_places() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.finish_animations();
+        let x = |l: &Layout, id| l.tiles(0, &fs).iter().find(|t| t.id == id).map(|t| (t.rect.x, t.moving)).unwrap();
+        let (from, to) = (x(&l, 2).0, x(&l, 1).0);
+        l.move_column(Dir::Left);
+        // It starts where it stood, is somewhere between a moment later, and arrives.
+        assert_eq!(x(&l, 2), (from, true));
+        assert!(l.advance(0.05));
+        let (mid, moving) = x(&l, 2);
+        assert!(moving && to < mid && mid < from, "{to} < {mid} < {from}");
+        // The size windows are told is the one they are heading for, from the start.
+        assert_eq!(l.sizes(0, &fs).iter().find(|t| t.id == 2).unwrap().rect.x, to);
+        for _ in 0..100 {
+            l.advance(0.05);
+        }
+        assert_eq!(x(&l, 2), (to, false));
+
+        // With animations off nothing slides.
+        l.set_options(Options { animation_speed: 0.0, ..l.opts.clone() });
+        l.move_column(Dir::Right);
+        assert_eq!(x(&l, 2), (from, false));
     }
 
     #[test]

@@ -12,18 +12,20 @@ pub enum Group {
     Windows,
     Columns,
     Look,
+    Motion,
     Keyboard,
     Pointer,
 }
 
 impl Group {
-    pub const ALL: [Group; 5] = [Group::Windows, Group::Columns, Group::Look, Group::Keyboard, Group::Pointer];
+    pub const ALL: [Group; 6] = [Group::Windows, Group::Columns, Group::Look, Group::Motion, Group::Keyboard, Group::Pointer];
 
     pub fn label(self) -> &'static str {
         match self {
             Group::Windows => "Windows",
             Group::Columns => "Columns",
             Group::Look => "Look",
+            Group::Motion => "Motion",
             Group::Keyboard => "Keyboard",
             Group::Pointer => "Pointer",
         }
@@ -80,12 +82,18 @@ pub const SETTINGS: &[Setting] = &[
     s("border_inactive", Group::Windows, "Other windows' border", "Empty: the Rivet theme's outline.", Kind::OptColor, ""),
     s("inactive_opacity", Group::Windows, "Unfocused windows' opacity", "1 is solid.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "1"),
     s("shadows", Group::Windows, "Shadows", "A soft shadow under each window.", Kind::Bool, "true"),
+    s("shadow_size", Group::Windows, "Shadow size", "How far a shadow reaches past its window, in pixels. Larger is also softer.", Kind::Int { min: 1, max: 120 }, "28"),
+    s("shadow_offset", Group::Windows, "Shadow offset", "How far below its window a shadow sits, in pixels.", Kind::Int { min: -60, max: 60 }, "7"),
+    s("shadow_opacity", Group::Windows, "Shadow strength", "0 is none, 1 is solid at the window's edge.", Kind::Float { min: 0.0, max: 1.0, step: 0.05 }, "0.4"),
+    s("shadow_color", Group::Windows, "Shadow colour", "", Kind::Color, "#000000"),
     s("column_widths", Group::Columns, "Column widths", "The widths the next-width key steps through, as parts of the screen.", Kind::Widths, "0.3333,0.5,0.6667"),
     s("default_width", Group::Columns, "A new column's width", "As a part of the screen.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "0.5"),
     s("theme", Group::Look, "Theme", "For Softcore's own panels and the colours it takes from Rivet.", Kind::Choice(&["system", "light", "dark"]), "system"),
     s("accent", Group::Look, "Accent", "Used when the desktop's colours aren't followed.", Kind::Color, "#3584e4"),
     s("follow_desktop_colors", Group::Look, "Follow the desktop's colours", "The colours Rivet Shell makes from the wallpaper.", Kind::Bool, "true"),
     s("background", Group::Look, "Behind everything", "Where no wallpaper is drawn. Empty: from the Rivet colours.", Kind::OptColor, ""),
+    s("animations", Group::Motion, "Animations", "Windows fade in and out and slide to their places. Off: everything is where it belongs at once.", Kind::Bool, "true"),
+    s("animation_speed", Group::Motion, "Animation speed", "1 is usual, 2 twice as fast.", Kind::Float { min: 0.25, max: 4.0, step: 0.25 }, "1"),
     s("mod", Group::Keyboard, "The Mod key", "auto: Super on displays of its own, Alt in a window of another desktop.", Kind::Choice(&["auto", "super", "alt"]), "auto"),
     s("default_binds", Group::Keyboard, "Softcore's own key bindings", "Off: only the bindings in this file.", Kind::Bool, "true"),
     s("xkb_layout", Group::Keyboard, "Layout", "As xkb names it: us, de, us,ru. Empty: the system's.", Kind::Text, ""),
@@ -156,6 +164,14 @@ pub struct Config {
     pub border_inactive: Option<[u8; 3]>,
     pub inactive_opacity: f32,
     pub shadows: bool,
+    /// How far a shadow reaches, how far below the window it sits, and how strong it is.
+    pub shadow_size: i32,
+    pub shadow_offset: i32,
+    pub shadow_opacity: f32,
+    pub shadow_color: [u8; 3],
+    pub animations: bool,
+    /// 1 is usual. `layout.animation_speed` is this, or 0 with animations off.
+    pub animation_speed: f64,
     /// None: from the Rivet colours.
     pub background: Option<[u8; 3]>,
     pub theme: Theme,
@@ -195,6 +211,12 @@ impl Default for Config {
             border_inactive: None,
             inactive_opacity: 1.0,
             shadows: true,
+            shadow_size: 28,
+            shadow_offset: 7,
+            shadow_opacity: 0.4,
+            shadow_color: [0, 0, 0],
+            animations: true,
+            animation_speed: 1.0,
             background: None,
             theme: Theme::System,
             accent: [0, 0, 0],
@@ -333,6 +355,12 @@ impl Config {
             "background" => self.background = color(),
             "inactive_opacity" => self.inactive_opacity = v.parse().unwrap_or(1.0),
             "shadows" => self.shadows = boolean(),
+            "shadow_size" => self.shadow_size = int().unwrap_or(28),
+            "shadow_offset" => self.shadow_offset = int().unwrap_or(7),
+            "shadow_opacity" => self.shadow_opacity = v.parse().unwrap_or(0.4),
+            "shadow_color" => self.shadow_color = color().unwrap_or_default(),
+            "animations" => self.animations = boolean(),
+            "animation_speed" => self.animation_speed = v.parse().unwrap_or(1.0),
             "column_widths" => self.layout.presets = widths(v).unwrap_or_default(),
             "default_width" => self.layout.default_width = v.parse().unwrap_or(0.5),
             "theme" => {
@@ -370,6 +398,7 @@ impl Config {
     /// What depends on more than one line, once every line is read.
     fn finish(&mut self) {
         self.layout.gaps_out = self.value("gaps_out").and_then(|v| v.parse().ok()).unwrap_or(self.layout.gaps);
+        self.layout.animation_speed = if self.animations { self.animation_speed } else { 0.0 };
         self.binds.clear();
         if self.default_binds {
             for line in DEFAULT_BINDS.lines() {

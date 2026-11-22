@@ -112,7 +112,8 @@ it and edit this file directly, through the code that owns the format. That wind
 built yet.
 
 The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
-`border_inactive`, `inactive_opacity`, `shadows`, `column_widths`, `default_width`, `theme`,
+`border_inactive`, `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
+`shadow_opacity`, `shadow_color`, `animations`, `animation_speed`, `column_widths`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -121,6 +122,23 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, …), with `allow-when-locked` before it
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
+
+## Motion and shadows
+
+Windows fade in a little small and grow into place, and fade out the same way; a window
+that changes column, width or height slides and grows to its new place, and its neighbours
+slide to make room. The strip and the workspaces slide as before. `animation_speed` makes
+all of it faster or slower (2 is twice as fast), and `animations=false` puts everything
+where it belongs at once.
+
+While a window is on its way, its picture is stretched to the size it has got to, so the
+slide is smooth whenever the program itself gets round to drawing at the new size. A
+program that is killed outright vanishes without fading: its last frame goes with it.
+
+Shadows have a size (larger is softer), an offset below the window, a strength and a
+colour: `shadow_size`, `shadow_offset`, `shadow_opacity`, `shadow_color`.
+
+There is no blur behind see-through windows or panels yet.
 
 ## Talking to it
 
@@ -199,6 +217,9 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   Sharing more than one thing in one request, and remembering a choice, aren't built.
 - X11 apps (no Xwayland), input methods, pointer locks for games, touch and tablets, touchpad
   gestures, presentation timing.
+- Blur behind see-through windows and panels. Opacity is one setting for every unfocused
+  window (`inactive_opacity`); an opacity per program waits for window rules.
+- Animations for floating windows and for going fullscreen and back, which jump.
 - Window rules, named workspaces, tabbed columns, moving and resizing floating windows with
   the pointer, an overview.
 - Clipping a window's own corners: the border is drawn over them, which reads as rounded,
@@ -207,7 +228,7 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
 ## Checks
 
 ```sh
-cargo test --workspace          # the layout's rules, the settings file both ways, the bindings
+cargo test --workspace          # the layout's rules and slides, the settings file both ways, the bindings
 softcore --headless --size 1600x900 --spawn rivet-terminal &
 softcore msg screenshot /tmp/softcore.png     # with SOFTCORE_SOCKET from its first lines
 wtype -M alt -k Return -m alt                 # keys, with WAYLAND_DISPLAY from its first lines

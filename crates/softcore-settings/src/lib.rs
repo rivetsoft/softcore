@@ -38,11 +38,13 @@ pub struct Options {
     pub presets: Vec<f64>,
     /// A new column's width.
     pub default_width: f64,
+    /// How fast things slide into place: 1 is usual, 2 twice as fast, 0 no sliding at all.
+    pub animation_speed: f64,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5 }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0 }
     }
 }
 
