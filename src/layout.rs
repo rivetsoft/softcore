@@ -63,11 +63,14 @@ pub struct Workspace {
     /// The display it belongs on: where it goes back to when that display returns after
     /// being away. An empty workspace belongs wherever it is.
     pub home: String,
+    /// Which way it scrolls, when it was told: it keeps that wherever it goes. None: as
+    /// the display it is on does.
+    pub scroll: Option<Scroll>,
 }
 
 impl Workspace {
     fn new(id: u64) -> Workspace {
-        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new() }
+        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new(), scroll: None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -200,9 +203,20 @@ impl Monitor {
         }
     }
 
-    /// The room for windows as the strip sees it: along the strip is always across.
-    fn strip_area(&self, o: &Options) -> Rect {
-        if self.vertical(o) { turned(self.area) } else { self.area }
+    /// Whether one of its workspaces scrolls up and down: as the workspace was told, else
+    /// as the display does.
+    pub fn ws_vertical(&self, ws: &Workspace, o: &Options) -> bool {
+        match ws.scroll {
+            Some(Scroll::Horizontal) => false,
+            Some(Scroll::Vertical) => true,
+            Some(Scroll::Auto) => self.size.1 > self.size.0,
+            None => self.vertical(o),
+        }
+    }
+
+    /// The room for windows as a strip sees it: along the strip is always across.
+    fn strip_area(&self, vertical: bool) -> Rect {
+        if vertical { turned(self.area) } else { self.area }
     }
 }
 
@@ -355,9 +369,18 @@ impl Layout {
         }
     }
 
-    /// Whether the focused display's windows scroll up and down.
+    /// Whether the workspace in view on the focused display scrolls up and down.
     pub fn vertical(&self) -> bool {
-        self.active_monitor().is_some_and(|m| m.vertical(&self.opts))
+        self.active_monitor().is_some_and(|m| m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, &self.opts)))
+    }
+
+    /// Tell the workspace in view which way to scroll. `Some(None)`: as its display does.
+    /// None: the other way from now.
+    pub fn set_workspace_scroll(&mut self, to: Option<Option<Scroll>>) {
+        let now = self.vertical();
+        let Some(ws) = self.ws() else { return };
+        ws.scroll = to.unwrap_or(Some(if now { Scroll::Horizontal } else { Scroll::Vertical }));
+        self.settle();
     }
 
     /// A direction on the screen as a direction on the strip, which is laid out as if it
@@ -707,7 +730,8 @@ impl Layout {
     pub fn center_column(&mut self) {
         let o = self.opts.clone();
         let Some(m) = self.mons.get_mut(self.active_mon) else { return };
-        let area = m.strip_area(&o);
+        let Some(ws) = m.wss.get(m.active) else { return };
+        let area = m.strip_area(m.ws_vertical(ws, &o));
         let Some(ws) = m.wss.get_mut(m.active) else { return };
         if ws.cols.is_empty() {
             return;
@@ -958,9 +982,9 @@ impl Layout {
                     ws.home.clone_from(&m.name);
                 }
             }
-            let area = m.strip_area(&o);
-            for ws in &mut m.wss {
-                ws.settle_view(&area, &o);
+            for wi in 0..m.wss.len() {
+                let area = m.strip_area(m.ws_vertical(&m.wss[wi], &o));
+                m.wss[wi].settle_view(&area, &o);
             }
         }
         if self.active_mon >= self.mons.len() {
@@ -1063,8 +1087,8 @@ impl Layout {
     /// they have got to). None: where every window stands on the strip itself, at rest.
     fn ws_tiles(&self, m: &Monitor, ws: &Workspace, focused: bool, float_size: &dyn Fn(WinId) -> (i32, i32), view: Option<f64>, out: &mut Vec<Tile>) {
         let o = &self.opts;
-        let vertical = m.vertical(o);
-        let area = &m.strip_area(o);
+        let vertical = m.ws_vertical(ws, o);
+        let area = &m.strip_area(vertical);
         let sliding = view.is_some();
         let view = view.unwrap_or(0.0);
         let b = o.border;
@@ -1187,7 +1211,7 @@ impl Layout {
             for t in &mut out[start..] {
                 if !t.floating && !t.fullscreen {
                     let by = ws.view_to.round() as i32;
-                    if m.vertical(&self.opts) { t.rect.y -= by } else { t.rect.x -= by }
+                    if m.ws_vertical(ws, &self.opts) { t.rect.y -= by } else { t.rect.x -= by }
                 }
             }
         }
@@ -1198,11 +1222,12 @@ impl Layout {
     pub fn new_window_size(&self, on: Option<&str>) -> Option<(i32, i32)> {
         let m = on.and_then(|n| self.monitor(n)).and_then(|i| self.mons.get(i)).or(self.mons.get(self.active_mon))?;
         let o = &self.opts;
-        let area = m.strip_area(o);
+        let vertical = m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, o));
+        let area = m.strip_area(vertical);
         let full = area.w - 2 * o.gaps_out;
         let w = (((full + o.gaps) as f64) * o.default_width).round() as i32 - o.gaps;
         let (w, h) = ((w - 2 * o.border).max(1), (area.h - 2 * o.gaps_out - 2 * o.border).max(1));
-        Some(if m.vertical(o) { (h, w) } else { (w, h) })
+        Some(if vertical { (h, w) } else { (w, h) })
     }
 }
 
@@ -1301,6 +1326,31 @@ mod tests {
         l.toggle_tabbed();
         l.finish_animations();
         assert!(l.tiles(0, &fs).iter().all(|t| !t.hidden && t.tab.is_none() && t.rect.h == 281));
+    }
+
+    #[test]
+    fn a_workspace_scrolls_its_own_way() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.focus_workspace(1);
+        l.add_window(2, false, None);
+        // The second workspace up and down, the first left as it was.
+        l.set_workspace_scroll(None);
+        l.finish_animations();
+        let size = |l: &Layout, id| l.sizes(0, &fs).iter().find(|t| t.id == id).map(|t| (t.rect.w, t.rect.h)).unwrap();
+        assert_eq!((size(&l, 1), size(&l, 2)), ((481, 576), (976, 281)));
+        // Down is along the strip here, and across it on the first.
+        assert_eq!(l.along(true), Dir::Down);
+        l.focus_workspace(0);
+        assert_eq!(l.along(true), Dir::Right);
+        // The display turned the other way takes only the workspace that wasn't told.
+        l.set_options(Options { scroll: Scroll::Vertical, ..l.opts.clone() });
+        assert_eq!((size(&l, 1), size(&l, 2)), ((976, 281), (976, 281)));
+        l.focus_workspace(1);
+        l.set_workspace_scroll(Some(Some(Scroll::Horizontal)));
+        assert_eq!(size(&l, 2), (481, 576));
+        l.set_workspace_scroll(Some(None));
+        assert_eq!(size(&l, 2), (976, 281));
     }
 
     #[test]

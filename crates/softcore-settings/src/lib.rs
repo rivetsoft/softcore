@@ -104,6 +104,9 @@ pub enum Action {
     MaximizeColumn,
     /// A column's windows one over the other, one showing at a time, or side by side again.
     ToggleTabbed,
+    /// Which way the workspace in view scrolls, whatever its display does. `Some(None)`:
+    /// as its display does again. None: the other way from now.
+    WorkspaceScroll(Option<Option<Scroll>>),
     FullscreenWindow,
     CenterColumn,
     ToggleFloating,
@@ -163,6 +166,11 @@ impl Action {
             "reset-window-height" => Action::ResetWindowHeight,
             "maximize-column" => Action::MaximizeColumn,
             "toggle-column-tabbed-display" => Action::ToggleTabbed,
+            "toggle-workspace-scroll" => Action::WorkspaceScroll(None),
+            "set-workspace-scroll" => Action::WorkspaceScroll(Some(match rest {
+                "default" => None,
+                v => Some(Scroll::parse(v).ok_or(format!("{name} needs horizontal, vertical, auto or default"))?),
+            })),
             "fullscreen-window" => Action::FullscreenWindow,
             "center-column" => Action::CenterColumn,
             "toggle-window-floating" => Action::ToggleFloating,
@@ -214,6 +222,13 @@ impl Action {
             Action::SetWindowHeight(_) => "Taller window".into(),
             Action::ResetWindowHeight => "Window as tall as there is room".into(),
             Action::MaximizeColumn => "Column as wide as the screen".into(),
+            Action::WorkspaceScroll(None) => "This workspace scrolls the other way".into(),
+            Action::WorkspaceScroll(Some(None)) => "This workspace scrolls as its display does".into(),
+            Action::WorkspaceScroll(Some(Some(s))) => format!("This workspace scrolls {}", match s {
+                Scroll::Horizontal => "sideways",
+                Scroll::Vertical => "up and down",
+                Scroll::Auto => "by the shape of its display",
+            }),
             Action::ToggleTabbed => "The windows of the column as tabs, or all showing".into(),
             Action::FullscreenWindow => "Full screen".into(),
             Action::CenterColumn => "Centre the column".into(),
@@ -427,6 +442,7 @@ Mod+Shift+Equal set-window-height +10%
 Mod+Ctrl+R reset-window-height
 Mod+F maximize-column
 Mod+W toggle-column-tabbed-display
+Mod+Shift+W toggle-workspace-scroll
 Mod+Shift+F fullscreen-window
 Mod+C center-column
 Mod+V toggle-window-floating

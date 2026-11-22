@@ -800,6 +800,7 @@ impl State {
             Action::ResetWindowHeight => self.layout.set_height(None, false),
             Action::MaximizeColumn => self.layout.toggle_maximized(),
             Action::ToggleTabbed => self.layout.toggle_tabbed(),
+            Action::WorkspaceScroll(to) => self.layout.set_workspace_scroll(to),
             Action::FullscreenWindow => {
                 if let Some(id) = active {
                     self.layout.set_fullscreen(id, None);

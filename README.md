@@ -153,6 +153,12 @@ on a display taller than it is wide, which suits one turned on its side; `horizo
 the usual way. A display's own line can say otherwise (`output.HDMI-A-1=scroll=vertical`).
 A change applies as the file is saved, and the windows slide to their new places.
 
+A workspace can go its own way too. Mod+Shift+W (`toggle-workspace-scroll`) turns the one
+in view the other way, and `set-workspace-scroll horizontal|vertical|auto|default` says
+which; `default` is as its display does again. A workspace told this keeps it wherever it
+goes, to another display and back, until it is empty and gone. Workspaces still sit beside
+one another the way their display says. `softcore msg workspaces` gives each one's `scroll`.
+
 Everything follows the turn. Up and down go from row to row and left and right between the
 windows sharing a row; a column's width settings (`default_width`, `column_widths`,
 `set-column-width`) are a row's height, and `set-window-height` is a window's width in its
