@@ -37,7 +37,8 @@ Softcore depends on the shared crates of [rivetsoft/apps](https://github.com/riv
 and anything it draws itself goes through them:
 
 - **`rivet-look`**: the border of the focused window is the Rivet accent, followed live with
-  the desktop's colours (a new wallpaper recolours the borders within two seconds); the other
+  the desktop's colours (a new wallpaper, another palette or light for dark in Rivet Shell
+  recolours the borders and panels at once: the files are watched); the other
   borders, the colour behind everything and the corner radius come from the same theme.
   Softcore's own panels (the keys, the question before leaving, the note about settings that
   couldn't be read) are egui in that theme.
@@ -92,7 +93,7 @@ What makes it work from both sides:
   window shows what was typed by hand.
 - **Order doesn't matter** between different keys, and an empty value means "follow": the
   edges follow `gaps`, colours and the radius follow Rivet.
-- **Softcore reads the file again when it changes**, within two seconds, whoever changed it.
+- **Softcore reads the file again the moment it changes**, whoever changed it.
 
 ```sh
 softcore settings                    # every setting and its value; a star marks ones in the file
@@ -113,7 +114,8 @@ built yet.
 
 The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
-`shadow_opacity`, `shadow_color`, `animations`, `animation_speed`, `column_widths`, `default_width`, `theme`,
+`shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
+`animation_speed`, `column_widths`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -123,7 +125,7 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
 
-## Motion and shadows
+## Motion, shadows and blur
 
 Windows fade in a little small and grow into place, and fade out the same way; a window
 that changes column, width or height slides and grows to its new place, and its neighbours
@@ -138,7 +140,17 @@ program that is killed outright vanishes without fading: its last frame goes wit
 Shadows have a size (larger is softer), an offset below the window, a strength and a
 colour: `shadow_size`, `shadow_offset`, `shadow_opacity`, `shadow_color`.
 
-There is no blur behind see-through windows or panels yet.
+What shows through a window that isn't solid (a see-through terminal, an unfocused window
+with `inactive_opacity` below 1) is blurred: `blur`, and `blur_strength` from 1 to 10.
+Behind a window that is the wallpaper, which is all a tiled window has behind it, so its
+blur is made once and kept until the wallpaper changes. A floating window shows the blurred
+wallpaper too, not the windows under it.
+
+Shell surfaces get blur behind them when they ask for it (ext-background-effect, with the
+part of themselves they want it behind), or when `blur_layers` names them: by default
+Rivet Shell's panel and dock. Behind those everything is blurred, windows included, and
+made again only when something under them changed. A surface named in `blur_layers` is
+blurred behind all of its rectangle, so name only ones that fill theirs.
 
 ## Talking to it
 
@@ -199,7 +211,7 @@ it should on a 4K display: handing the GPU's own buffers to PipeWire is the next
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
 selection and data-control, drag and drop, idle notify and idle inhibit, xdg-activation,
 foreign-toplevel-list, screen capture (ext-image-copy-capture, of displays and of windows),
-virtual keyboards and pointers, fractional scale, viewporter,
+virtual keyboards and pointers, blur behind a surface (ext-background-effect), fractional scale, viewporter,
 cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dmabuf).
 
 ## What isn't built yet
@@ -217,8 +229,9 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   Sharing more than one thing in one request, and remembering a choice, aren't built.
 - X11 apps (no Xwayland), input methods, pointer locks for games, touch and tablets, touchpad
   gestures, presentation timing.
-- Blur behind see-through windows and panels. Opacity is one setting for every unfocused
-  window (`inactive_opacity`); an opacity per program waits for window rules.
+- Opacity per program: it is one setting for every unfocused window (`inactive_opacity`)
+  until there are window rules. Blur doesn't follow a surface's round corners or its
+  see-through parts; it fills the rectangle.
 - Animations for floating windows and for going fullscreen and back, which jump.
 - Window rules, named workspaces, tabbed columns, moving and resizing floating windows with
   the pointer, an overview.

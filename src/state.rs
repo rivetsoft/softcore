@@ -124,6 +124,8 @@ pub struct State {
     pub captures: crate::capture::Captures,
     /// Windows that have closed and are fading out.
     pub closing: Vec<crate::render::Closing>,
+    pub watch: Option<crate::watch::Watch>,
+    pub blur: crate::blur::Blur,
     pub casts: crate::cast::Casts,
     /// The question of what to share, while it is being asked.
     pub picker: Option<crate::picker::Picker>,
@@ -194,6 +196,8 @@ impl State {
         SinglePixelBufferState::new::<State>(&dh);
         CursorShapeManagerState::new::<State>(&dh);
         IdleInhibitManagerState::new::<State>(&dh);
+        // Surfaces may say which part of themselves wants blur behind it.
+        smithay::wayland::background_effect::BackgroundEffectState::new::<State>(&dh);
         // Typing and pointing by programs: on-screen keyboards, remote control, checks.
         smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState::new::<State, _>(&dh, |_| true);
         smithay::wayland::virtual_pointer::VirtualPointerManagerState::new::<State, _>(&dh, |_| true);
@@ -241,6 +245,8 @@ impl State {
             ipc,
             captures: Default::default(),
             closing: Vec::new(),
+            watch: None,
+            blur: Default::default(),
             casts: Default::default(),
             picker: None,
             output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState::new::<State>(&dh2),
@@ -601,7 +607,8 @@ impl State {
         wanted || moving || was
     }
 
-    /// Every two seconds, like the Rivet apps: the settings and the desktop's colours.
+    /// The moment a watched file changes, and every two seconds besides: the settings and
+    /// the desktop's colours.
     pub fn check_files(&mut self) {
         if self.config.changed_on_disk() {
             self.reload_config();

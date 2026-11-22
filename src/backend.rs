@@ -72,6 +72,7 @@ fn new_output(name: &str, model: &str) -> Output {
 /// What both need once there is a renderer: the shaders, and buffers straight from the GPU.
 pub fn renderer_ready(state: &mut State, renderer: &mut GlesRenderer) {
     state.shaders = render::Shaders::compile(renderer);
+    state.blur.programs = crate::blur::Programs::compile(renderer);
     let formats = renderer.dmabuf_formats();
     if formats.iter().next().is_some() {
         state.dmabuf_global = Some(state.dmabuf_state.create_global::<State>(&state.dh, formats));

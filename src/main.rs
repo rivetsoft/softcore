@@ -1,6 +1,7 @@
 //! Softcore: the scrolling-tiling Wayland compositor for the Rivet desktop.
 
 mod backend;
+mod blur;
 mod capture;
 mod cast;
 mod config;
@@ -15,6 +16,7 @@ mod render;
 mod settings_cli;
 mod state;
 mod udev;
+mod watch;
 mod ui;
 
 use std::time::Duration;
@@ -143,6 +145,7 @@ fn main() {
             TimeoutAction::ToDuration(Duration::from_secs(2))
         })
         .expect("a timer");
+    watch::start(&event_loop.handle(), &mut state);
 
     tracing::info!("Softcore is up: WAYLAND_DISPLAY={} SOFTCORE_SOCKET={}", state.socket, state.ipc.path().display());
     // For whoever started it (a script, a check) to find it.

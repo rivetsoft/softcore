@@ -43,11 +43,16 @@ pub struct Ui {
     buffer: Option<(MemoryRenderBuffer, (i32, i32))>,
     dirty: bool,
     look: Option<Look>,
+    /// Whether the desktop asked for dark when last looked.
+    dark: bool,
 }
 
 fn choice(c: &Config) -> Choice {
     Choice { mode: match c.theme {
-        crate::config::Theme::System => theme::Mode::System,
+        // Nothing tells Softcore's own panels what the desktop chose, as a window system
+        // tells an app: ask the desktop's settings directly.
+        crate::config::Theme::System if rivet_look::palette::prefers_dark() => theme::Mode::Dark,
+        crate::config::Theme::System => theme::Mode::Light,
         crate::config::Theme::Light => theme::Mode::Light,
         crate::config::Theme::Dark => theme::Mode::Dark,
     }, accent: c.accent, follow_desktop_colors: c.follow_desktop_colors, text_size: 0.0 }
@@ -59,7 +64,7 @@ fn rgb(c: Color32) -> [u8; 3] {
 
 impl Ui {
     pub fn new() -> Ui {
-        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None }
+        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark() }
     }
 
     pub fn show(&mut self, panel: Panel) {
@@ -90,13 +95,15 @@ impl Ui {
     }
 
     /// Whether the desktop's colours changed on disk (a new wallpaper, a palette chosen in
-    /// Rivet Shell). Called every two seconds.
+    /// Rivet Shell, light for dark). Called when one of the files changes.
     pub fn check_look(&mut self) -> bool {
         let new = LiveLook::new();
-        if new.palette() == self.live.palette() {
+        let dark = rivet_look::palette::prefers_dark();
+        if new.palette() == self.live.palette() && dark == self.dark {
             return false;
         }
         self.live = new;
+        self.dark = dark;
         self.look = None;
         self.dirty = true;
         true

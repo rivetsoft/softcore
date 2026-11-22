@@ -471,6 +471,15 @@ impl IdleNotifierHandler for State {
     }
 }
 
+impl smithay::wayland::background_effect::ExtBackgroundEffectHandler for State {
+    fn set_blur_region(&mut self, _: WlSurface, _: smithay::wayland::compositor::RegionAttributes) {
+        self.queue_redraw();
+    }
+    fn unset_blur_region(&mut self, _: WlSurface) {
+        self.queue_redraw();
+    }
+}
+
 impl IdleInhibitHandler for State {
     fn inhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.push(surface);

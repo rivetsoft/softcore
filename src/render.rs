@@ -19,9 +19,11 @@ use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Transform};
-use smithay::wayland::compositor::with_states;
+use smithay::wayland::background_effect::BackgroundEffectSurfaceCachedState;
+use smithay::wayland::compositor::{RectangleKind, with_states};
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::blur::{Backdrop, For};
 use crate::layout::{Rect, Tile, WinId};
 use crate::state::State;
 
@@ -126,7 +128,33 @@ fn popup_elements(renderer: &mut GlesRenderer, surface: &WlSurface, at: Point<i3
     }
 }
 
-fn layer_elements(renderer: &mut GlesRenderer, output: &Output, layer: Layer, scale: Scale<f64>, out: &mut Vec<Elem>) {
+/// The parts of a display that shell surfaces of a layer want blurred behind them: what a
+/// surface asked for itself, or all of it when the settings name it.
+fn layer_blur(state: &State, output: &Output, layer: Layer) -> Vec<(WlSurface, Rect)> {
+    let map = layer_map_for_output(output);
+    let mut out = Vec::new();
+    for l in map.layers_on(layer) {
+        let Some(g) = map.layer_geometry(l) else { continue };
+        let asked = with_states(l.wl_surface(), |s| s.cached_state.get::<BackgroundEffectSurfaceCachedState>().current().blur_region.clone());
+        match asked {
+            Some(region) => {
+                for (kind, r) in region.rects {
+                    if matches!(kind, RectangleKind::Add)
+                        && let Some(r) = r.intersection(Rectangle::from_size(g.size))
+                    {
+                        out.push((l.wl_surface().clone(), Rect::new(g.loc.x + r.loc.x, g.loc.y + r.loc.y, r.size.w, r.size.h)));
+                    }
+                }
+            }
+            None if state.config.blur_layers.iter().any(|n| n == l.namespace()) => out.push((l.wl_surface().clone(), Rect::new(g.loc.x, g.loc.y, g.size.w, g.size.h))),
+            None => {}
+        }
+    }
+    out
+}
+
+/// `blur`: the picture of what is behind, and where these surfaces want it.
+fn layer_elements(renderer: &mut GlesRenderer, output: &Output, layer: Layer, scale: Scale<f64>, mut blur: Option<(&mut Backdrop, &[(WlSurface, Rect)], &mut u32)>, out: &mut Vec<Elem>) {
     let map = layer_map_for_output(output);
     // Menus of every surface on the layer first, so a neighbour never covers one.
     let layers: Vec<_> = map.layers_on(layer).rev().filter_map(|l| map.layer_geometry(l).map(|g| (l.wl_surface().clone(), g.loc))).collect();
@@ -135,6 +163,12 @@ fn layer_elements(renderer: &mut GlesRenderer, output: &Output, layer: Layer, sc
     }
     for (surface, loc) in &layers {
         surface_elements(renderer, surface, *loc, scale, 1.0, out);
+        if let Some((behind, wanted, n)) = &mut blur {
+            for (_, rect) in wanted.iter().filter(|(s, _)| s == surface) {
+                **n += 1;
+                out.extend(behind.piece(renderer, For::Layer(**n), *rect, 1.0));
+            }
+        }
     }
 }
 
@@ -276,7 +310,7 @@ fn scaled(r: Rect, by: f64) -> Rect {
     Rect::new(r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
 }
 
-fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, scale: Scale<f64>, out: &mut Vec<Elem>) {
+fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, scale: Scale<f64>, wall: Option<&mut Backdrop>, out: &mut Vec<Elem>) {
     let Some(mut win) = state.wins.remove(&t.id) else { return };
     if let Some(surface) = win.window.toplevel().map(|t| t.wl_surface().clone()) {
         let geo = win.window.geometry();
@@ -313,6 +347,11 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
                 let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(renderer, &surface, loc, scale, alpha, Kind::Unspecified);
                 out.extend(parts.into_iter().map(|e| Elem::Scaled(RescaleRenderElement::from_element(e, origin, by))));
             }
+        }
+        // What shows through it, blurred: the wallpaper, since tiled windows have nothing else
+        // behind them (a floating one shows the wallpaper too, not the windows under it).
+        if let Some(wall) = wall.filter(|_| !t.fullscreen) {
+            out.extend(wall.piece(renderer, For::Window(t.id), rect, shown as f32));
         }
         out.extend(edges.shadow(state, &mut win.deco, rect));
     }
@@ -429,21 +468,45 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
         }
     }
 
-    let tiles = state.tiles(output);
-    layer_elements(renderer, output, Layer::Overlay, scale, &mut out);
-    for t in tiles.iter().rev().filter(|t| t.fullscreen) {
-        window_elements(state, renderer, t, scale, &mut out);
-    }
-    layer_elements(renderer, output, Layer::Top, scale, &mut out);
-    closing_elements(state, renderer, output, scale, &mut out);
-    for t in tiles.iter().rev().filter(|t| !t.fullscreen) {
-        window_elements(state, renderer, t, scale, &mut out);
-    }
-    layer_elements(renderer, output, Layer::Bottom, scale, &mut out);
-    layer_elements(renderer, output, Layer::Background, scale, &mut out);
-
     let bg = state.ui.look(&state.config).background;
-    (out, [bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0, 1.0])
+    let clear = [bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0, 1.0];
+    let tiles = state.tiles(output);
+    let name = output.name();
+    let programs = state.blur.programs.clone().filter(|_| state.config.blur);
+    let mut behind = state.blur.outputs.remove(&name).unwrap_or_default();
+    let mode = output.current_mode().map(|m| m.size).unwrap_or_default();
+    let strength = state.config.blur_strength;
+
+    // From the bottom up, since what is above may want a blurred picture of what is below.
+    let mut low = Vec::new();
+    layer_elements(renderer, output, Layer::Bottom, scale, None, &mut low);
+    layer_elements(renderer, output, Layer::Background, scale, None, &mut low);
+    match &programs {
+        Some(p) if !tiles.is_empty() => crate::blur::update(&mut behind.wall, renderer, p, mode, scale.x, strength, &low, clear),
+        _ => behind.wall = None,
+    }
+    let mut under = Vec::new();
+    closing_elements(state, renderer, output, scale, &mut under);
+    for t in tiles.iter().rev().filter(|t| !t.fullscreen) {
+        window_elements(state, renderer, t, scale, behind.wall.as_mut(), &mut under);
+    }
+    under.append(&mut low);
+
+    let wanted: Vec<(WlSurface, Rect)> = if programs.is_some() { [Layer::Overlay, Layer::Top].into_iter().flat_map(|l| layer_blur(state, output, l)).collect() } else { Vec::new() };
+    match &programs {
+        Some(p) if !wanted.is_empty() => crate::blur::update(&mut behind.scene, renderer, p, mode, scale.x, strength, &under, clear),
+        _ => behind.scene = None,
+    }
+    let mut n = 0;
+    layer_elements(renderer, output, Layer::Overlay, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
+    for t in tiles.iter().rev().filter(|t| t.fullscreen) {
+        window_elements(state, renderer, t, scale, None, &mut out);
+    }
+    layer_elements(renderer, output, Layer::Top, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
+    out.append(&mut under);
+    state.blur.outputs.insert(name, behind);
+
+    (out, clear)
 }
 
 /// After a frame is shown: tell clients they may draw the next one. Windows out of sight are
