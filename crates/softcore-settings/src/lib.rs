@@ -292,6 +292,9 @@ pub struct Bind {
     pub action: Action,
     /// Works while the screen is locked.
     pub locked: bool,
+    /// What the keys panel says it does, in place of the action's own words. Empty: left
+    /// out of the panel.
+    pub title: Option<String>,
 }
 
 /// `Mod+Shift+Q` into its parts.
@@ -317,11 +320,21 @@ pub fn parse_bind(combo: &str, action: &str) -> Result<Bind, String> {
     let (mods, key) = parse_combo(combo)?;
     let mut action = action.trim();
     let mut locked = false;
-    if let Some(a) = action.strip_prefix("allow-when-locked ") {
-        locked = true;
-        action = a.trim();
+    let mut title = None;
+    // What may stand before the action, in either order.
+    loop {
+        if let Some(a) = action.strip_prefix("allow-when-locked ") {
+            locked = true;
+            action = a.trim();
+        } else if let Some(a) = action.strip_prefix("title=\"") {
+            let (t, rest) = a.split_once('"').ok_or("a title needs a closing quote")?;
+            title = Some(t.trim().to_string());
+            action = rest.trim();
+        } else {
+            break;
+        }
     }
-    Ok(Bind { mods, key, shown: combo.to_string(), action: Action::parse(action)?, locked })
+    Ok(Bind { mods, key, shown: combo.to_string(), action: Action::parse(action)?, locked, title })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -543,6 +556,12 @@ mod tests {
         assert_eq!((c.outputs[0].mode, c.outputs[0].scale, c.outputs[0].position), (Some((2560, 1440, Some(59951))), Some(1.5), Some((2560, 0))));
         assert!(c.outputs[1].off);
         assert_eq!((c.env.clone(), c.spawn.clone()), (vec![("A".to_string(), "2".to_string())], vec!["rivet-shell".to_string()]));
+        // A title of its own for the keys panel, before or after allow-when-locked.
+        let t = Config::from_text("bind.Mod+T=title=\"Terminal\" spawn foot\nbind.Mod+B=allow-when-locked title=\"\" spawn x\nbind.Mod+N=title=\"oops spawn x\n");
+        let b = |k: &str| t.binds.iter().find(|b| b.key == k).cloned();
+        assert_eq!(b("t").map(|b| (b.title, b.action)), Some((Some("Terminal".into()), Action::Spawn("foot".into()))));
+        assert_eq!(b("b").map(|b| (b.title, b.locked)), Some((Some(String::new()), true)));
+        assert!(b("n").is_none() && t.errors.len() == 1);
         // Wherever default_binds=false stands, the file's own bindings stay.
         let only = Config::from_text("bind.Mod+T=spawn foot\ndefault_binds=false\n");
         assert_eq!(only.binds.len(), 1);

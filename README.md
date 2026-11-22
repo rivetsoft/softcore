@@ -145,6 +145,14 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
 
+`title="…"` before the action says what the keys panel (Mod+Shift+/) shows for a binding, in
+place of the action's own words, and `title=""` leaves it out of the panel:
+
+```
+bind.Mod+T=title="Terminal" spawn rivet-terminal
+bind.Mod+Shift+P=title="" spawn some-script
+```
+
 ## Scrolling up and down
 
 `scroll=vertical` turns the layout a quarter turn: windows sit in rows one under the other,

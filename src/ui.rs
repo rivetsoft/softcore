@@ -259,6 +259,13 @@ fn keys(ui: &mut egui::Ui, c: &Config, mod_is_alt: bool) {
 fn key_rows(c: &Config) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = Vec::new();
     for b in &c.binds {
+        // Its own title from the settings, or none at all.
+        if let Some(t) = &b.title {
+            if !t.is_empty() {
+                rows.push((b.shown.clone(), t.clone()));
+            }
+            continue;
+        }
         let digit = b.key.len() == 1 && b.key.chars().all(|ch| ch.is_ascii_digit());
         let mut shown = b.shown.clone();
         let label = match (&b.action, digit) {
