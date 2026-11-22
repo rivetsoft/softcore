@@ -45,6 +45,8 @@ uniform float alpha;
 uniform vec2 size;
 varying vec2 v_coords;
 uniform vec4 u_color;
+uniform vec4 u_color2;
+uniform vec2 u_dir;
 uniform float u_radius;
 uniform float u_width;
 uniform float u_alpha;
@@ -59,7 +61,10 @@ void main() {
     float outer = rounded(p, size * 0.5, u_radius);
     float inner = rounded(p, size * 0.5 - u_width, max(u_radius - u_width, 0.0));
     float a = clamp(0.5 - outer, 0.0, 1.0) * clamp(inner + 0.5, 0.0, 1.0);
-    gl_FragColor = u_color * a * alpha * u_alpha;
+    // From one colour to the other across the whole border, along u_dir.
+    float reach = abs(size.x * u_dir.x) + abs(size.y * u_dir.y);
+    float t = clamp(dot(p, u_dir) / max(reach, 1.0) + 0.5, 0.0, 1.0);
+    gl_FragColor = mix(u_color, u_color2, t) * a * alpha * u_alpha;
 }
 "#;
 
@@ -101,7 +106,7 @@ pub struct Shaders {
 
 impl Shaders {
     pub fn compile(renderer: &mut GlesRenderer) -> Option<Shaders> {
-        let border = renderer.compile_custom_pixel_shader(BORDER_SHADER, &[UniformName::new("u_color", UniformType::_4f), UniformName::new("u_radius", UniformType::_1f), UniformName::new("u_width", UniformType::_1f), UniformName::new("u_alpha", UniformType::_1f)]);
+        let border = renderer.compile_custom_pixel_shader(BORDER_SHADER, &[UniformName::new("u_color", UniformType::_4f), UniformName::new("u_color2", UniformType::_4f), UniformName::new("u_dir", UniformType::_2f), UniformName::new("u_radius", UniformType::_1f), UniformName::new("u_width", UniformType::_1f), UniformName::new("u_alpha", UniformType::_1f)]);
         let shadow = renderer.compile_custom_pixel_shader(SHADOW_SHADER, &["u_margin", "u_reach", "u_offset", "u_radius", "u_alpha"].map(|n| UniformName::new(n, UniformType::_1f)).into_iter().chain([UniformName::new("u_color", UniformType::_4f)]).collect::<Vec<_>>());
         match (border, shadow) {
             (Ok(border), Ok(shadow)) => Some(Shaders { border, shadow }),
@@ -200,6 +205,9 @@ fn cursor_elements(state: &mut State, renderer: &mut GlesRenderer, output: &Outp
 struct BorderKey {
     rect: Rect,
     color: [u8; 3],
+    /// The colour it runs to, and the way it runs: 0 is upwards, 90 to the right.
+    color2: [u8; 3],
+    angle: i32,
     width: i32,
     radius: i32,
     alpha: f32,
@@ -233,7 +241,8 @@ impl Deco {
     fn border(&mut self, shaders: &Shaders, key: BorderKey) -> Elem {
         let w = key.width;
         let area = logical(Rect::new(key.rect.x - w, key.rect.y - w, key.rect.w + 2 * w, key.rect.h + 2 * w));
-        let uniforms = vec![Uniform::new("u_color", rgb(key.color, 1.0)), Uniform::new("u_radius", key.radius as f32), Uniform::new("u_width", w as f32), Uniform::new("u_alpha", key.alpha)];
+        let turn = (key.angle as f32).to_radians();
+        let uniforms = vec![Uniform::new("u_color", rgb(key.color, 1.0)), Uniform::new("u_color2", rgb(key.color2, 1.0)), Uniform::new("u_dir", [turn.sin(), -turn.cos()]), Uniform::new("u_radius", key.radius as f32), Uniform::new("u_width", w as f32), Uniform::new("u_alpha", key.alpha)];
         match &mut self.border {
             Some((e, k)) => {
                 if *k != key {
@@ -277,6 +286,7 @@ struct Edges {
     border: bool,
     shadow: bool,
     color: [u8; 3],
+    color2: [u8; 3],
     radius: i32,
     alpha: f32,
 }
@@ -284,7 +294,7 @@ struct Edges {
 impl Edges {
     fn border(&self, state: &State, deco: &mut Deco, rect: Rect) -> Option<Elem> {
         let shaders = state.shaders.as_ref().filter(|_| self.border)?;
-        Some(deco.border(shaders, BorderKey { rect, color: self.color, width: state.config.layout.border, radius: self.radius, alpha: self.alpha }))
+        Some(deco.border(shaders, BorderKey { rect, color: self.color, color2: self.color2, angle: state.config.border_angle, width: state.config.layout.border, radius: self.radius, alpha: self.alpha }))
     }
 
     fn shadow(&self, state: &State, deco: &mut Deco, rect: Rect) -> Option<Elem> {
@@ -294,6 +304,17 @@ impl Edges {
         let rect = Rect::new(rect.x - b, rect.y - b, rect.w + 2 * b, rect.h + 2 * b);
         Some(deco.shadow(shaders, ShadowKey { rect, radius: self.radius, size: c.shadow_size, offset: c.shadow_offset, opacity: c.shadow_opacity, color: c.shadow_color, alpha: self.alpha }))
     }
+}
+
+/// A border's two colours: the one it starts with, and the one it runs to (the same, for a
+/// border of one colour).
+fn border_colors(state: &State, look: &crate::ui::Look, t: &Tile) -> ([u8; 3], [u8; 3]) {
+    let c = &state.config;
+    // A window holding every key says so with a border of the opposite colours.
+    if state.all_keys == Some(t.id) {
+        return (look.active.map(|v| 255 - v), c.border_active_to.unwrap_or(look.active).map(|v| 255 - v));
+    }
+    if t.active { (look.active, c.border_active_to.unwrap_or(look.active)) } else { (look.inactive, c.border_inactive_to.unwrap_or(look.inactive)) }
 }
 
 /// Fast at first, gentle at the end.
@@ -319,11 +340,12 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         // Appearing: it fades in, growing a little.
         let shown = ease(win.shown);
         let rect = if shown < 1.0 { scaled(t.rect, SMALL + (1.0 - SMALL) * shown) } else { t.rect };
+        let colors = border_colors(state, &look, t);
         let edges = Edges {
             border: t.border && !t.fullscreen,
             shadow: !t.fullscreen,
-            // A window holding every key says so with a border of the opposite colour.
-            color: if state.all_keys == Some(t.id) { look.active.map(|c| 255 - c) } else if t.active { look.active } else { look.inactive },
+            color: colors.0,
+            color2: colors.1,
             radius: if state.config.layout.border > 0 { look.radius } else { 0 },
             alpha: shown as f32,
         };
@@ -391,10 +413,12 @@ pub fn start_closing(state: &mut State, id: WinId) {
     remember(state, id);
     let Some(texture) = state.wins.get_mut(&id).and_then(|w| w.picture.take()) else { return };
     let look = state.ui.look(&state.config);
+    let colors = border_colors(state, &look, &t);
     let edges = Edges {
         border: t.border && !t.fullscreen,
         shadow: !t.fullscreen,
-        color: if t.active { look.active } else { look.inactive },
+        color: colors.0,
+        color2: colors.1,
         radius: if state.config.layout.border > 0 { look.radius } else { 0 },
         alpha: 1.0,
     };

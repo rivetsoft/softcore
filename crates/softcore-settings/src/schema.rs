@@ -80,6 +80,9 @@ pub const SETTINGS: &[Setting] = &[
     s("radius", Group::Windows, "Corner radius", "In pixels. Empty: Rivet's.", Kind::OptInt { min: 0, max: 100 }, ""),
     s("border_active", Group::Windows, "Focused window's border", "Empty: the Rivet accent.", Kind::OptColor, ""),
     s("border_inactive", Group::Windows, "Other windows' border", "Empty: the Rivet theme's outline.", Kind::OptColor, ""),
+    s("border_active_to", Group::Windows, "Focused window's border runs to", "A second colour makes the border a gradient from the first to this one. Empty: one colour.", Kind::OptColor, ""),
+    s("border_inactive_to", Group::Windows, "Other windows' border runs to", "Empty: one colour.", Kind::OptColor, ""),
+    s("border_angle", Group::Windows, "Border gradient angle", "The way a gradient runs, in degrees: 0 is upwards, 90 to the right, 180 downwards.", Kind::Int { min: 0, max: 360 }, "135"),
     s("inactive_opacity", Group::Windows, "Unfocused windows' opacity", "1 is solid.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "1"),
     s("shadows", Group::Windows, "Shadows", "A soft shadow under each window.", Kind::Bool, "true"),
     s("shadow_size", Group::Windows, "Shadow size", "How far a shadow reaches past its window, in pixels. Larger is also softer.", Kind::Int { min: 1, max: 120 }, "28"),
@@ -167,6 +170,11 @@ pub struct Config {
     /// None: the Rivet accent, and the theme's outline.
     pub border_active: Option<[u8; 3]>,
     pub border_inactive: Option<[u8; 3]>,
+    /// The colour each border runs to as a gradient; None: one colour.
+    pub border_active_to: Option<[u8; 3]>,
+    pub border_inactive_to: Option<[u8; 3]>,
+    /// Degrees: 0 upwards, 90 to the right.
+    pub border_angle: i32,
     pub inactive_opacity: f32,
     pub shadows: bool,
     /// How far a shadow reaches, how far below the window it sits, and how strong it is.
@@ -218,6 +226,9 @@ impl Default for Config {
             radius: None,
             border_active: None,
             border_inactive: None,
+            border_active_to: None,
+            border_inactive_to: None,
+            border_angle: 135,
             inactive_opacity: 1.0,
             shadows: true,
             shadow_size: 28,
@@ -364,6 +375,9 @@ impl Config {
             "radius" => self.radius = int(),
             "border_active" => self.border_active = color(),
             "border_inactive" => self.border_inactive = color(),
+            "border_active_to" => self.border_active_to = color(),
+            "border_inactive_to" => self.border_inactive_to = color(),
+            "border_angle" => self.border_angle = int().unwrap_or(135),
             "background" => self.background = color(),
             "inactive_opacity" => self.inactive_opacity = v.parse().unwrap_or(1.0),
             "shadows" => self.shadows = boolean(),

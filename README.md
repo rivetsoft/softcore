@@ -126,7 +126,8 @@ it and edit this file directly, through the code that owns the format. That wind
 built yet.
 
 The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
-`border_inactive`, `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
+`border_inactive`, `border_active_to`, `border_inactive_to`, `border_angle`,
+`inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
 `animation_speed`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
@@ -137,6 +138,20 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
+
+## Borders
+
+A border is one colour, or a gradient: give it a second colour to run to
+(`border_active_to` for the focused window, `border_inactive_to` for the others) and the
+way it runs, `border_angle` in degrees (0 upwards, 90 to the right, 180 downwards). The
+first colour of each is still Rivet's unless the settings name one, so a gradient can start
+from the accent of the day.
+
+```
+border=4
+border_active_to=#00c8ff
+border_angle=135
+```
 
 ## Floating windows
 
