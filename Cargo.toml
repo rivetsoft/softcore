@@ -40,6 +40,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 xcursor = "0.3"
 pipewire = { version = "0.10", features = ["v0_3_34"] }
 zbus = "5"
+# To ask the desktop a window of Softcore is on for its key bindings (see src/host.rs).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+raw-window-handle = "0.6"
 blocking = "1"
 
 [workspace]

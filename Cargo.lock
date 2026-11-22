@@ -3140,6 +3140,7 @@ dependencies = [
  "image",
  "libc",
  "pipewire",
+ "raw-window-handle",
  "rivet-kit",
  "rivet-look",
  "rivet-xdg",
@@ -3149,6 +3150,9 @@ dependencies = [
  "softcore-settings",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "xcursor",
  "zbus",
 ]

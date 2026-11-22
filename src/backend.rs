@@ -54,6 +54,8 @@ pub struct Winit {
     backend: WinitGraphicsBackend<GlesRenderer>,
     /// Whether swapping has been told not to wait for the desktop outside.
     unthrottled: bool,
+    /// The request for the outer desktop's key bindings, when Mod is Super here too.
+    keys: Option<crate::host::Keys>,
     output: Output,
     tracker: OutputDamageTracker,
 }
@@ -108,7 +110,12 @@ pub fn init_winit(event_loop: &EventLoop<'static, State>, state: &mut State) -> 
     renderer_ready(state, backend.renderer());
     let tracker = OutputDamageTracker::from_output(&output);
     state.add_output(output.clone());
-    state.backend = Some(Backend::Winit(Winit { backend, unthrottled: false, output: output.clone(), tracker }));
+    // With Mod as Super in a window, the desktop outside would act on every binding itself.
+    let keys = (!state.mod_is_alt()).then(|| crate::host::ask_for_keys(backend.window())).flatten();
+    if !state.mod_is_alt() {
+        tracing::info!("{}", if keys.is_some() { "asked the desktop outside for its key bindings: its own key takes them back (niri: Mod+Escape)" } else { "the desktop outside has no way to give its key bindings to a window" });
+    }
+    state.backend = Some(Backend::Winit(Winit { backend, unthrottled: false, keys, output: output.clone(), tracker }));
 
     event_loop
         .handle()
@@ -133,6 +140,9 @@ pub fn init_winit(event_loop: &EventLoop<'static, State>, state: &mut State) -> 
 
 impl Winit {
     fn draw(&mut self, state: &mut State) {
+        if let Some(k) = &mut self.keys {
+            k.tidy();
+        }
         let egl_display = self.backend.renderer().egl_context().display().get_display_handle().handle;
         // How old the window's picture is can only be asked while the window is what is being
         // drawn to, and since the last frame something else has been (a blurred picture, a

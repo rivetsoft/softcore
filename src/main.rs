@@ -8,6 +8,7 @@ mod config;
 mod cursor;
 mod float;
 mod handlers;
+mod host;
 mod input;
 mod ipc;
 mod layout;
