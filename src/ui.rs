@@ -117,7 +117,7 @@ impl Ui {
         }
         let fit = |w: i32, h: i32| (w.min(screen.0 - 40).max(120), h.min(screen.1 - 40).max(80));
         let size = match self.panel {
-            Panel::Keys => fit(820, 100 + 29 * key_rows(c).len().div_ceil(2) as i32),
+            Panel::Keys => fit(820, 84 + 28 * key_rows(c).len().div_ceil(2) as i32),
             Panel::Quit => fit(440, 150),
             _ => fit(640, 160 + 24 * c.errors.len().min(12) as i32),
         };

@@ -198,6 +198,9 @@ pub fn parse_combo(text: &str) -> Result<(Mods, String), String> {
 fn parse_bind(value: &str) -> Result<Bind, String> {
     let (combo, action) = value.trim().split_once(char::is_whitespace).ok_or(format!("bind={value} needs a key and an action"))?;
     let (mods, key) = parse_combo(combo)?;
+    if crate::input::key_sym(&key).is_none() {
+        return Err(format!("bind={value}: there is no key called {key:?}"));
+    }
     let mut action = action.trim();
     let mut locked = false;
     if let Some(a) = action.strip_prefix("allow-when-locked ") {

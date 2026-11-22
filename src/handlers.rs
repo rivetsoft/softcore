@@ -3,7 +3,7 @@
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
-use smithay::desktop::{LayerSurface, PopupKind, Window, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output};
+use smithay::desktop::{LayerSurface, PopupKeyboardGrab, PopupKind, PopupPointerGrab, PopupUngrabStrategy, Window, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output};
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
 use smithay::input::pointer::{CursorImageStatus, Focus};
 use smithay::input::tablet::TabletSeatHandler;
@@ -168,8 +168,28 @@ impl XdgShellHandler for State {
         surface.send_repositioned(token);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
-        // Menus close when their app sees a click elsewhere; no grab is held for them yet.
+    fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
+        // A menu takes the keyboard and the pointer while it is open, and is told to close
+        // when a click lands outside its app.
+        let Some(seat) = Seat::<State>::from_resource(&seat) else { return };
+        let kind = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&kind) else { return };
+        let Ok(mut grab) = self.popups.grab_popup(root, kind, &seat, serial) else { return };
+        if let Some(keyboard) = seat.get_keyboard() {
+            if keyboard.is_grabbed() && !(keyboard.has_grab(serial) || keyboard.has_grab(grab.previous_serial().unwrap_or(serial))) {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            keyboard.set_focus(self, grab.current_grab(), serial);
+            keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        }
+        if let Some(pointer) = seat.get_pointer() {
+            if pointer.is_grabbed() && !(pointer.has_grab(serial) || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial()))) {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+        }
     }
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
@@ -375,6 +395,38 @@ impl DataControlHandler for State {
 }
 
 impl OutputHandler for State {}
+
+impl smithay::wayland::virtual_keyboard::VirtualKeyboardHandler for State {
+    fn process_virtual_keyboard_event(&mut self, event: smithay::backend::input::InputEvent<smithay::wayland::virtual_keyboard::VirtualKeyboardBackend>) {
+        use smithay::backend::input::InputEvent;
+        use smithay::wayland::virtual_keyboard::VirtualKeyboardSpecialEvent as Special;
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        match event {
+            // Its key numbers mean something only in its own layout: use that while it types.
+            InputEvent::DeviceAdded { device } | InputEvent::Special(Special::KeymapChanged { device }) => {
+                if let Some(keymap) = device.keymap()
+                    && keyboard.set_keymap_from_keymap_file(self, keymap).is_ok()
+                {
+                    self.borrowed_keymap = true;
+                }
+            }
+            // And the settings' layout again when it has gone.
+            InputEvent::DeviceRemoved { .. } => self.restore_keymap(),
+            InputEvent::Special(Special::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. }) => {
+                keyboard.with_xkb_state(self, |mut context| context.set_modifier_mask(mods_depressed, mods_latched, mods_locked, group));
+            }
+            event @ InputEvent::Keyboard { .. } => self.process_input(event, None),
+            _ => {}
+        }
+    }
+}
+
+/// A pointer made by a program (a remote desktop, a check): handled like a real one.
+impl smithay::wayland::virtual_pointer::VirtualPointerHandler for State {
+    fn process_virtual_pointer_event(&mut self, event: smithay::backend::input::InputEvent<smithay::wayland::virtual_pointer::VirtualPointerBackend>) {
+        self.process_input(event, None);
+    }
+}
 
 impl SessionLockHandler for State {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {

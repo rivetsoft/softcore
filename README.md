@@ -101,17 +101,18 @@ JSON array of words; the answer is `{"ok": …}` or `{"error": "…"}`.
 
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
 selection and data-control, drag and drop, idle notify and idle inhibit, xdg-activation,
-foreign-toplevel-list, fractional scale, viewporter, cursor-shape, single-pixel buffers, and
-buffers straight from the GPU (linux-dmabuf).
+foreign-toplevel-list, virtual keyboards and pointers, fractional scale, viewporter,
+cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dmabuf).
 
 ## What isn't built yet
 
 - **A run on real displays.** The TTY backend (DRM, libinput, libseat, TTY switching) is
   written from smithay's own examples and compiles; nobody has started it on hardware yet.
   Expect to fix things there first. It draws with one GPU.
-- **Keys and the pointer under test.** Bindings, clicks and the wheel are handled, but the
-  checks so far drive Softcore through `softcore msg` (there is no input in memory), so that
-  path has only been compiled, not exercised.
+- Real keyboards and mice. Bindings, typing and click-to-focus are checked through virtual
+  devices (`wtype`, `wlrctl`), which take the same path; libinput devices, and with them
+  touchpad settings, wait for the first run on hardware. The wheel and menus that close on
+  a click outside are written but not checked.
 - Screen capture for other programs (screencopy, so screenshots and screen sharing from
   Rivet Shell or a portal), and screenshots of a real display. `softcore msg screenshot`
   works in a window and headless.
@@ -125,9 +126,11 @@ buffers straight from the GPU (linux-dmabuf).
 ## Checks
 
 ```sh
-cargo test                      # the layout's rules and the settings reader
+cargo test                      # the layout's rules, the settings reader, the bindings
 softcore --headless --size 1600x900 --spawn rivet-terminal &
 softcore msg screenshot /tmp/softcore.png     # with SOFTCORE_SOCKET from its first lines
+wtype -M alt -k Return -m alt                 # keys, with WAYLAND_DISPLAY from its first lines
+wlrctl pointer click left                     # and the pointer
 ```
 
 ## Licence

@@ -34,6 +34,7 @@ type Surface = DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDe
 
 struct Screen {
     output: Output,
+    global: smithay::reexports::wayland_server::backend::GlobalId,
     surface: Surface,
     /// A frame is on its way to the display; the next waits for it to be shown.
     pending: bool,
@@ -174,6 +175,7 @@ impl Udev {
                 DrmScanEvent::Connected { connector, crtc: Some(crtc) } => self.connected(state, connector, crtc),
                 DrmScanEvent::Disconnected { crtc: Some(crtc), .. } => {
                     if let Some(s) = self.screens.remove(&crtc) {
+                        state.dh.remove_global::<State>(s.global);
                         state.remove_output(&s.output);
                     }
                 }
@@ -228,10 +230,9 @@ impl Udev {
                 return;
             }
         };
-        // Kept for as long as Softcore runs; a display that goes simply stops being drawn.
-        std::mem::forget(output.create_global::<State>(&state.dh));
+        let global = output.create_global::<State>(&state.dh);
         state.add_output(output.clone());
-        self.screens.insert(crtc, Screen { output, surface, pending: false });
+        self.screens.insert(crtc, Screen { output, global, surface, pending: false });
     }
 
     pub fn draw(&mut self, state: &mut State) {

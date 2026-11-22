@@ -14,17 +14,15 @@ use crate::ui::Panel;
 
 impl State {
     fn bind_matches(&self, b: &Bind, mods: &ModifiersState, sym: Keysym) -> bool {
-        let alt_mod = self.mod_is_alt();
-        let want_alt = b.mods.alt || (b.mods.modkey && alt_mod);
-        let want_logo = b.mods.logo || (b.mods.modkey && !alt_mod);
-        (mods.ctrl, mods.shift, mods.alt, mods.logo) == (b.mods.ctrl, b.mods.shift, want_alt, want_logo) && xkb::keysym_from_name(&b.key, xkb::KEYSYM_CASE_INSENSITIVE) == sym
+        bind_matches(b, self.mod_is_alt(), (mods.ctrl, mods.shift, mods.alt, mods.logo), sym)
     }
 
     /// What a key press means to Softcore itself, if anything. `Some(None)`: taken, with
     /// nothing more to do.
-    fn key_pressed(&mut self, mods: &ModifiersState, sym: Keysym) -> Option<Option<Action>> {
-        // Ctrl+Alt+F1…F12: another TTY, whatever else is going on.
-        let vt = sym.raw().wrapping_sub(Keysym::XF86_Switch_VT_1.raw());
+    fn key_pressed(&mut self, mods: &ModifiersState, sym: Keysym, modified: Keysym) -> Option<Option<Action>> {
+        // Ctrl+Alt+F1…F12: another TTY, whatever else is going on. The keyboard layout turns
+        // those into keys of their own, which only the modified key shows.
+        let vt = modified.raw().wrapping_sub(Keysym::XF86_Switch_VT_1.raw());
         if vt < 12 {
             return Some(Some(Action::ChangeVt(vt as i32 + 1)));
         }
@@ -44,6 +42,11 @@ impl State {
 
     pub fn process_input<I: InputBackend>(&mut self, event: InputEvent<I>, output: Option<&Output>) {
         self.idle_notifier_state.notify_activity(&self.seat);
+        // Any key or movement brings blanked displays back.
+        if self.monitors_off && matches!(event, InputEvent::Keyboard { .. } | InputEvent::PointerMotion { .. } | InputEvent::PointerMotionAbsolute { .. } | InputEvent::PointerButton { .. }) {
+            self.monitors_off = false;
+            self.queue_redraw();
+        }
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -64,7 +67,7 @@ impl State {
                     }
                     // The key as it is without Shift, so Mod+Shift+1 is "1" and not "!".
                     let sym = handle.raw_latin_sym_or_raw_current_sym().unwrap_or_else(|| handle.modified_sym());
-                    match state.key_pressed(mods, sym) {
+                    match state.key_pressed(mods, sym, handle.modified_sym()) {
                         Some(action) => {
                             state.suppressed_keys.push(raw);
                             FilterResult::Intercept(action)
@@ -126,12 +129,8 @@ impl State {
         } else {
             self.layer_focus = self.layer_under(pos).filter(|l| l.cached_state().keyboard_interactivity != KeyboardInteractivity::None);
         }
-        self.sync_and_focus();
-        self.queue_redraw();
-    }
-
-    fn sync_and_focus(&mut self) {
         self.update_focus();
+        self.queue_redraw();
     }
 
     fn wheel<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
@@ -167,5 +166,50 @@ impl State {
         let pointer = self.seat.get_pointer().unwrap();
         pointer.axis(self, frame);
         pointer.frame(self);
+    }
+}
+
+/// Whether a binding is the key pressed, with exactly its modifiers held (Ctrl, Shift, Alt,
+/// Super). `alt_mod`: Mod is Alt, not Super.
+pub fn bind_matches(b: &Bind, alt_mod: bool, held: (bool, bool, bool, bool), sym: Keysym) -> bool {
+    let want_alt = b.mods.alt || (b.mods.modkey && alt_mod);
+    let want_logo = b.mods.logo || (b.mods.modkey && !alt_mod);
+    held == (b.mods.ctrl, b.mods.shift, want_alt, want_logo) && key_sym(&b.key) == Some(sym)
+}
+
+/// The key a binding names, if there is such a key.
+pub fn key_sym(name: &str) -> Option<Keysym> {
+    let sym = xkb::keysym_from_name(name, xkb::KEYSYM_CASE_INSENSITIVE);
+    (sym != Keysym::NoSymbol).then_some(sym)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[test]
+    fn every_default_binding_names_a_real_key() {
+        let c = Config::default();
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        for b in &c.binds {
+            assert!(key_sym(&b.key).is_some(), "{} names no key", b.shown);
+        }
+    }
+
+    #[test]
+    fn mod_is_super_or_alt_and_modifiers_must_match_exactly() {
+        let c = Config::default();
+        let find = |alt_mod, held, sym| c.binds.iter().find(|b| bind_matches(b, alt_mod, held, sym)).map(|b| b.action.clone());
+        // Ctrl, Shift, Alt, Super.
+        assert_eq!(find(false, (false, false, false, true), Keysym::q), Some(Action::CloseWindow));
+        assert_eq!(find(true, (false, false, true, false), Keysym::q), Some(Action::CloseWindow));
+        assert_eq!(find(true, (false, false, false, true), Keysym::q), None);
+        assert_eq!(find(false, (false, false, false, false), Keysym::q), None);
+        // Shift held: a different binding, and the key is still "f", not "F".
+        assert_eq!(find(false, (false, true, false, true), Keysym::f), Some(Action::FullscreenWindow));
+        assert_eq!(find(false, (false, false, false, true), Keysym::f), Some(Action::MaximizeColumn));
+        assert_eq!(find(false, (true, false, false, true), Keysym::_3), Some(Action::MoveToWorkspace { idx: 2, column: true }));
+        assert_eq!(find(false, (false, false, false, true), Keysym::bracketleft), Some(Action::ConsumeOrExpel(crate::layout::Dir::Left)));
     }
 }

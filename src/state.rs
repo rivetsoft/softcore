@@ -111,6 +111,8 @@ pub struct State {
     pub cursors: Cursors,
     /// Keys held down that started a binding: their release isn't the client's either.
     pub suppressed_keys: Vec<u32>,
+    /// The keyboard layout in use is a virtual keyboard's, not the settings'.
+    pub borrowed_keymap: bool,
     /// A panel or launcher that took the keyboard when clicked or opened.
     pub layer_focus: Option<LayerSurface>,
     pub lock: Lock,
@@ -187,6 +189,9 @@ impl State {
         SinglePixelBufferState::new::<State>(&dh);
         CursorShapeManagerState::new::<State>(&dh);
         IdleInhibitManagerState::new::<State>(&dh);
+        // Typing and pointing by programs: on-screen keyboards, remote control, checks.
+        smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState::new::<State, _>(&dh, |_| true);
+        smithay::wayland::virtual_pointer::VirtualPointerManagerState::new::<State, _>(&dh, |_| true);
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
@@ -217,6 +222,7 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             cursors,
             suppressed_keys: Vec::new(),
+            borrowed_keymap: false,
             layer_focus: None,
             lock: Lock::default(),
             monitors_off: false,
@@ -478,6 +484,10 @@ impl State {
         }
         let target = self.focus_target();
         let Some(keyboard) = self.seat.get_keyboard() else { return };
+        // An open menu holds the keyboard until it closes.
+        if keyboard.is_grabbed() {
+            return;
+        }
         if keyboard.current_focus() != target {
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
             if let Some(id) = self.layout.active_window() {
@@ -486,6 +496,26 @@ impl State {
                     w.focused_at = now;
                 }
             }
+        }
+    }
+
+    /// What is under the pointer can change without the pointer moving (a window opens, a
+    /// column scrolls away): tell the old surface it left and the new one it entered.
+    fn update_pointer_focus(&mut self) {
+        if let CursorImageStatus::Surface(s) = &self.cursor_status
+            && !s.alive()
+        {
+            self.cursor_status = CursorImageStatus::default_named();
+        }
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        if pointer.is_grabbed() {
+            return;
+        }
+        let under = self.surface_under(self.pointer_pos);
+        if pointer.current_focus() != under.as_ref().map(|(s, _)| s.clone()) {
+            let time = self.start.elapsed().as_millis() as u32;
+            pointer.motion(self, under, &smithay::input::pointer::MotionEvent { location: self.pointer_pos, serial: SERIAL_COUNTER.next_serial(), time: smithay::backend::input::InputTime::from_millis(time) });
+            pointer.frame(self);
         }
     }
 
@@ -508,6 +538,7 @@ impl State {
         self.update_areas();
         self.sync_windows();
         self.update_focus();
+        self.update_pointer_focus();
         crate::ipc::notify(self);
         let _ = self.dh.flush_clients();
     }
@@ -530,6 +561,19 @@ impl State {
         }
         if self.ui.check_look() {
             self.queue_redraw();
+        }
+    }
+
+    /// Back to the keyboard layout of the settings, after a virtual keyboard used its own.
+    pub fn restore_keymap(&mut self) {
+        if !std::mem::take(&mut self.borrowed_keymap) {
+            return;
+        }
+        let Some(k) = self.seat.get_keyboard() else { return };
+        let c = self.config.clone();
+        let xkb = XkbConfig { layout: &c.xkb_layout, variant: &c.xkb_variant, options: (!c.xkb_options.is_empty()).then(|| c.xkb_options.clone()), ..Default::default() };
+        if k.set_xkb_config(self, xkb).is_err() {
+            let _ = k.set_xkb_config(self, XkbConfig::default());
         }
     }
 
