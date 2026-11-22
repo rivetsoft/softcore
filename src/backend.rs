@@ -133,8 +133,15 @@ pub fn init_winit(event_loop: &EventLoop<'static, State>, state: &mut State) -> 
 
 impl Winit {
     fn draw(&mut self, state: &mut State) {
-        let age = self.backend.buffer_age().unwrap_or(0);
         let egl_display = self.backend.renderer().egl_context().display().get_display_handle().handle;
+        // How old the window's picture is can only be asked while the window is what is being
+        // drawn to, and since the last frame something else has been (a blurred picture, a
+        // capture). Without this every frame is drawn whole, and an error logged each time.
+        let (surface, context) = (self.backend.egl_surface().get_surface_handle(), self.backend.renderer().egl_context().get_context_handle());
+        unsafe {
+            smithay::backend::egl::ffi::egl::MakeCurrent(egl_display, surface, surface, context);
+        }
+        let age = self.backend.buffer_age().unwrap_or(0);
         let first = !std::mem::replace(&mut self.unthrottled, true);
         let damage = {
             let (renderer, mut fb) = match self.backend.bind() {
