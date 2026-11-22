@@ -6,6 +6,7 @@ mod capture;
 mod cast;
 mod config;
 mod cursor;
+mod float;
 mod handlers;
 mod input;
 mod ipc;

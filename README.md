@@ -131,6 +131,21 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
 
+## Floating windows
+
+Dialogs and windows of a fixed size float over the columns; Mod+V floats any window, or puts
+it back. A floating window starts in the middle at the size it chose, and from there:
+
+- Mod and the left button moves it, Mod and the right button resizes it from the nearest
+  corner. Its own title bar and edges work too, when it draws them.
+- The keys that move and size columns do the same to it: Mod+Ctrl+arrows move it,
+  Mod+Minus and Mod+Equal its width, Mod+Shift+Minus and Mod+Shift+Equal its height,
+  Mod+C back to the middle, Mod+Ctrl+R back to the size it chooses itself.
+- It stays where it was put, at the size it was given, through being put in a column and
+  floated again. Enough of it always stays on the display to take hold of.
+
+A window shown from the scratchpad is a floating window, and all of this goes for it.
+
 ## Motion, shadows and blur
 
 Windows fade in a little small and grow into place, and fade out the same way; a window
@@ -239,9 +254,9 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   until there are window rules. Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
 - Animations for floating windows and for going fullscreen and back, which jump.
-- Window rules, named workspaces, tabbed columns, moving and resizing floating windows with
-  the pointer (a floating window sits in the middle of the screen at the size it chose),
-  an overview. Scratchpads with names of their own, and one that starts its program when
+- Window rules, named workspaces, tabbed columns, an overview. A dialog opens in the
+  middle of the screen, not over its parent, and a window in a column can't be dragged
+  out of it with the pointer. Scratchpads with names of their own, and one that starts its program when
   first asked for, wait for window rules.
 - Clipping a window's own corners: the border is drawn over them, which reads as rounded,
   but a window with no border has square corners.

@@ -194,6 +194,18 @@ pub struct Tile {
     pub moving: bool,
 }
 
+/// Where a floating window was put and the size it was given, when it was: until then it
+/// sits in the middle at the size it chose.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Float {
+    /// Its corner, from the corner of the part of the display panels leave free.
+    pub pos: Option<(i32, i32)>,
+    pub size: Option<(i32, i32)>,
+}
+
+/// How much of a floating window always stays on its display, to take hold of.
+const HOLD: i32 = 48;
+
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub mons: Vec<Monitor>,
@@ -208,6 +220,7 @@ pub struct Layout {
     /// others share what is left.
     heights: HashMap<WinId, f64>,
     /// Windows put away in the scratchpad, the next one to show first.
+    floats: HashMap<WinId, Float>,
     pub scratch: Vec<WinId>,
     /// Windows out of the scratchpad and on show: the scratchpad key puts these away again.
     shown: Vec<WinId>,
@@ -215,7 +228,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), scratch: Vec::new(), shown: Vec::new() }
+        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), floats: HashMap::new(), scratch: Vec::new(), shown: Vec::new() }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -366,6 +379,7 @@ impl Layout {
     pub fn remove_window(&mut self, id: WinId) {
         self.scratch.retain(|w| *w != id);
         self.shown.retain(|w| *w != id);
+        self.floats.remove(&id);
         for m in &mut self.mons {
             for ws in &mut m.wss {
                 if ws.remove(id) {
@@ -654,8 +668,30 @@ impl Layout {
         Some(id)
     }
 
+    // ---- floating windows ----
+
+    pub fn float(&self, id: WinId) -> Float {
+        self.floats.get(&id).copied().unwrap_or_default()
+    }
+
+    /// Put a floating window somewhere, or give it a size; it stays there, and that size,
+    /// through being put in a column and floated again.
+    pub fn set_float(&mut self, id: WinId, f: Float) {
+        self.floats.insert(id, Float { pos: f.pos, size: f.size.map(|(w, h)| (w.max(80), h.max(60))) });
+    }
+
+    /// The part of the display a window's workspace has, panels left out.
+    pub fn area_of(&self, id: WinId) -> Option<Rect> {
+        self.find(id).map(|(mi, _)| self.mons[mi].area)
+    }
+
+    /// The size a floating window is asked to be. None: its own choice.
+    pub fn float_size(&self, id: WinId) -> Option<(i32, i32)> {
+        self.float(id).size.or_else(|| self.scratchpad_size(id))
+    }
+
     /// The size a window shown from the scratchpad is asked to be.
-    pub fn scratchpad_size(&self, id: WinId) -> Option<(i32, i32)> {
+    fn scratchpad_size(&self, id: WinId) -> Option<(i32, i32)> {
         if !self.shown.contains(&id) {
             return None;
         }
@@ -949,7 +985,14 @@ impl Layout {
         for id in &ws.floating {
             let (w, h) = float_size(*id);
             let (w, h) = (w.clamp(1, area.w.max(1)), h.clamp(1, area.h.max(1)));
-            let rect = Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h);
+            // Where it was put, else the middle; and never so far off that it can't be reached.
+            let (x, y) = match self.float(*id).pos {
+                Some((x, y)) => (area.x + x, area.y + y),
+                None => (area.x + (area.w - w) / 2, area.y + (area.h - h) / 2),
+            };
+            let x = x.min(area.x + area.w - HOLD).max(area.x + HOLD - w);
+            let y = y.min(area.y + area.h - HOLD).max(area.y);
+            let rect = Rect::new(x, y, w, h);
             if ws.fullscreen != Some(*id) {
                 out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false });
             }
@@ -1066,8 +1109,8 @@ mod tests {
         assert_eq!((l.find(2), l.active_window(), l.scratch.clone()), (None, Some(1), vec![2]));
         // Shown: floating, focused, at the scratchpad's size.
         assert_eq!(l.toggle_scratchpad(), Some(2));
-        assert_eq!((l.is_floating(2), l.active_window(), l.scratchpad_size(2)), (true, Some(2), Some((700, 420))));
-        assert_eq!(l.scratchpad_size(1), None);
+        assert_eq!((l.is_floating(2), l.active_window(), l.float_size(2)), (true, Some(2), Some((700, 420))));
+        assert_eq!(l.float_size(1), None);
         // And away again, with the focus back where it was.
         assert_eq!(l.toggle_scratchpad(), None);
         assert_eq!((l.find(2), l.active_window()), (None, Some(1)));
@@ -1090,6 +1133,27 @@ mod tests {
         l.remove_window(2);
         assert_eq!(l.toggle_scratchpad(), None);
         assert!(l.scratch.is_empty());
+    }
+
+    #[test]
+    fn a_floating_window_stays_where_it_is_put() {
+        let mut l = layout();
+        l.add_window(1, true, None);
+        let rect = |l: &Layout| l.tiles(0, &fs)[0].rect;
+        assert_eq!(rect(&l), Rect::new(350, 200, 300, 200));
+        l.set_float(1, Float { pos: Some((20, 30)), size: Some((400, 10)) });
+        // Where it was put (its picture is still the size the window itself has), and the
+        // size it is asked to be, which is never tiny.
+        assert_eq!((rect(&l), l.float_size(1)), (Rect::new(20, 30, 300, 200), Some((400, 60))));
+        // Through a column and back.
+        l.toggle_floating(1);
+        l.toggle_floating(1);
+        assert_eq!(rect(&l), Rect::new(20, 30, 300, 200));
+        // Dragged off the display, enough stays on to take hold of.
+        l.set_float(1, Float { pos: Some((5000, -500)), size: None });
+        assert_eq!(rect(&l), Rect::new(952, 0, 300, 200));
+        l.set_float(1, Float { pos: Some((-5000, 5000)), size: None });
+        assert_eq!(rect(&l), Rect::new(-252, 552, 300, 200));
     }
 
     #[test]

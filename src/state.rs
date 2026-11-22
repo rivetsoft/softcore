@@ -126,6 +126,8 @@ pub struct State {
     pub closing: Vec<crate::render::Closing>,
     pub watch: Option<crate::watch::Watch>,
     pub blur: crate::blur::Blur,
+    /// A floating window being moved or resized with the pointer.
+    pub drag: Option<crate::float::Drag>,
     pub casts: crate::cast::Casts,
     /// The question of what to share, while it is being asked.
     pub picker: Option<crate::picker::Picker>,
@@ -247,6 +249,7 @@ impl State {
             closing: Vec::new(),
             watch: None,
             blur: Default::default(),
+            drag: None,
             casts: Default::default(),
             picker: None,
             output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState::new::<State>(&dh2),
@@ -453,7 +456,7 @@ impl State {
             let sizes = self.layout.sizes(mi, &self.float_size());
             for t in sizes {
                 // A floating window chooses its size, but one from the scratchpad is given one.
-                let scratch = self.layout.scratchpad_size(t.id);
+                let scratch = self.layout.float_size(t.id);
                 let Some(win) = self.wins.get_mut(&t.id) else { continue };
                 let Some(top) = win.window.toplevel() else { continue };
                 top.with_pending_state(|s| {
@@ -685,6 +688,10 @@ impl State {
     }
 
     pub fn do_action(&mut self, action: Action) {
+        if crate::float::action(self, &action) {
+            self.queue_redraw();
+            return;
+        }
         use crate::layout::Dir;
         let active = self.layout.active_window();
         match action {

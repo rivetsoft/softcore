@@ -206,6 +206,22 @@ impl XdgShellHandler for State {
         }
     }
 
+    // A window's own title bar dragged, or its own edge: for a floating window that is the
+    // same as holding it with Mod. A window in a column stays in its column.
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
+        if let Some(id) = self.win_for_surface(surface.wl_surface()) {
+            crate::float::start(self, id, false, None, false);
+        }
+    }
+
+    fn resize_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial, edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge) {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
+        let corner = (matches!(edges, E::Left | E::TopLeft | E::BottomLeft), matches!(edges, E::Top | E::TopLeft | E::TopRight));
+        if let Some(id) = self.win_for_surface(surface.wl_surface()) {
+            crate::float::start(self, id, true, Some(corner), false);
+        }
+    }
+
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         // A column is as tall as the screen already; answer so the client isn't left waiting.
         if surface.is_initial_configure_sent() {

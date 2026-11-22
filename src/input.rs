@@ -109,8 +109,29 @@ impl State {
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();
                 let serial = SERIAL_COUNTER.next_serial();
-                if event.state() == ButtonState::Pressed && !pointer.is_grabbed() && !self.lock.locked {
+                let pressed = event.state() == ButtonState::Pressed;
+                // A floating window held by the pointer: any button let go lets go of it.
+                if !pressed && let Some(d) = &self.drag {
+                    let quiet = d.quiet;
+                    crate::float::end(self);
+                    if quiet {
+                        return;
+                    }
+                }
+                if pressed && !pointer.is_grabbed() && !self.lock.locked {
                     self.clicked(self.pointer_pos);
+                    // Mod and a button on a floating window: left moves it, right resizes it.
+                    let mods = self.seat.get_keyboard().unwrap().modifier_state();
+                    let held = if self.mod_is_alt() { mods.alt } else { mods.logo };
+                    let button = event.button_code();
+                    if held
+                        && (button == 0x110 || button == 0x111)
+                        && self.ui.panel == Panel::None
+                        && let Some(id) = self.window_under(self.pointer_pos)
+                        && crate::float::start(self, id, button == 0x111, None, true)
+                    {
+                        return;
+                    }
                 }
                 pointer.button(self, &ButtonEvent { button: event.button_code(), state: event.state(), serial, time: event.time() });
                 pointer.frame(self);
@@ -122,6 +143,12 @@ impl State {
 
     fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: smithay::backend::input::InputTime) {
         self.pointer_pos = pos;
+        if self.drag.is_some() {
+            // The window follows the pointer; nothing under it hears of the movement.
+            crate::float::moved(self);
+            self.queue_redraw();
+            return;
+        }
         crate::picker::hover(self, pos);
         let under = self.surface_under(pos);
         let pointer = self.seat.get_pointer().unwrap();
