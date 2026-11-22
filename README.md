@@ -31,7 +31,8 @@ softcore --spawn foot   # run something once started
 In a window, Mod is Alt (the desktop outside keeps Super); on displays of its own it is Super.
 Mod+Shift+/ shows every key. The ones to know first: Mod+Return a terminal, Mod+Space the
 launcher, Mod+Q close, Mod+arrows move the focus, Mod+Ctrl+arrows move the window, Mod+R the
-next column width, Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces,
+next column width, Mod+Shift+Minus and Mod+Shift+Equal a shorter or taller window (it sits in
+the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces,
 Mod+Shift+E leave.
 
 ## What it shares with Rivet
@@ -118,13 +119,13 @@ built yet.
 The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
-`animation_speed`, `column_widths`, `default_width`, `theme`,
+`animation_speed`, `column_widths`, `center_short_columns`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
 
 A binding's value is an action, named as niri names them (`focus-column-left`,
-`move-column-to-workspace 3`, `set-column-width +10%`, …), with `allow-when-locked` before it
+`move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
 

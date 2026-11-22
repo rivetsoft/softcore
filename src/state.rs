@@ -702,6 +702,9 @@ impl State {
             Action::SwitchPresetWidth => self.layout.switch_preset_width(),
             Action::SetColumnWidth(WidthChange::By(b)) => self.layout.change_width(b),
             Action::SetColumnWidth(WidthChange::To(w)) => self.layout.set_width(w),
+            Action::SetWindowHeight(WidthChange::By(b)) => self.layout.set_height(Some(b), true),
+            Action::SetWindowHeight(WidthChange::To(h)) => self.layout.set_height(Some(h), false),
+            Action::ResetWindowHeight => self.layout.set_height(None, false),
             Action::MaximizeColumn => self.layout.toggle_maximized(),
             Action::FullscreenWindow => {
                 if let Some(id) = active {

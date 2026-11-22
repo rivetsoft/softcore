@@ -40,11 +40,14 @@ pub struct Options {
     pub default_width: f64,
     /// How fast things slide into place: 1 is usual, 2 twice as fast, 0 no sliding at all.
     pub animation_speed: f64,
+    /// A column whose windows don't fill the screen's height sits in the middle of it
+    /// (else at the top).
+    pub center_short_columns: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0 }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true }
     }
 }
 
@@ -67,6 +70,8 @@ pub enum Action {
     ConsumeOrExpel(Dir),
     SwitchPresetWidth,
     SetColumnWidth(WidthChange),
+    SetWindowHeight(WidthChange),
+    ResetWindowHeight,
     MaximizeColumn,
     FullscreenWindow,
     CenterColumn,
@@ -117,7 +122,9 @@ impl Action {
             "consume-or-expel-window-left" => Action::ConsumeOrExpel(Dir::Left),
             "consume-or-expel-window-right" => Action::ConsumeOrExpel(Dir::Right),
             "switch-preset-column-width" => Action::SwitchPresetWidth,
-            "set-column-width" => Action::SetColumnWidth(parse_width(rest)?),
+            "set-column-width" => Action::SetColumnWidth(parse_width(name, rest)?),
+            "set-window-height" => Action::SetWindowHeight(parse_width(name, rest)?),
+            "reset-window-height" => Action::ResetWindowHeight,
             "maximize-column" => Action::MaximizeColumn,
             "fullscreen-window" => Action::FullscreenWindow,
             "center-column" => Action::CenterColumn,
@@ -160,6 +167,9 @@ impl Action {
             Action::SwitchPresetWidth => "Next column width".into(),
             Action::SetColumnWidth(WidthChange::By(b)) if *b < 0.0 => "Narrower column".into(),
             Action::SetColumnWidth(_) => "Wider column".into(),
+            Action::SetWindowHeight(WidthChange::By(b)) if *b < 0.0 => "Shorter window".into(),
+            Action::SetWindowHeight(_) => "Taller window".into(),
+            Action::ResetWindowHeight => "Window as tall as there is room".into(),
             Action::MaximizeColumn => "Column as wide as the screen".into(),
             Action::FullscreenWindow => "Full screen".into(),
             Action::CenterColumn => "Centre the column".into(),
@@ -190,8 +200,8 @@ fn dir_name(d: Dir) -> &'static str {
     }
 }
 
-fn parse_width(t: &str) -> Result<WidthChange, String> {
-    let bad = || format!("set-column-width needs a width like 50%, +10% or -10%, not {t:?}");
+fn parse_width(name: &str, t: &str) -> Result<WidthChange, String> {
+    let bad = || format!("{name} needs a size like 50%, +10% or -10%, not {t:?}");
     let pct = t.strip_suffix('%').ok_or_else(bad)?;
     let v: f64 = pct.parse().map_err(|_| bad())?;
     Ok(if pct.starts_with('+') || pct.starts_with('-') { WidthChange::By(v / 100.0) } else { WidthChange::To(v / 100.0) })
@@ -342,6 +352,9 @@ Mod+BracketRight consume-or-expel-window-right
 Mod+R switch-preset-column-width
 Mod+Minus set-column-width -10%
 Mod+Equal set-column-width +10%
+Mod+Shift+Minus set-window-height -10%
+Mod+Shift+Equal set-window-height +10%
+Mod+Ctrl+R reset-window-height
 Mod+F maximize-column
 Mod+Shift+F fullscreen-window
 Mod+C center-column

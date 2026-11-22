@@ -204,11 +204,14 @@ pub struct Layout {
     places: HashMap<WinId, (u64, Rect)>,
     /// How far each window still is from its place (x, y, width, height), shrinking to nothing.
     offsets: HashMap<WinId, [f64; 4]>,
+    /// Windows given a height of their own, as a part of the height a column has. The
+    /// others share what is left.
+    heights: HashMap<WinId, f64>,
 }
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new() }
+        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new() }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -360,6 +363,7 @@ impl Layout {
         for m in &mut self.mons {
             for ws in &mut m.wss {
                 if ws.remove(id) {
+                    self.heights.remove(&id);
                     self.settle();
                     return;
                 }
@@ -525,6 +529,47 @@ impl Layout {
         c.maximized = false;
         c.width = to.clamp(0.1, 1.0);
         self.settle();
+    }
+
+    /// Give the focused window a height of its own: a part of the column's height, or
+    /// (`by`) that much more or less than it has now. None: back to sharing the room.
+    pub fn set_height(&mut self, to: Option<f64>, by: bool) {
+        let Some(ws) = self.active_workspace() else { return };
+        let Some(col) = ws.cols.get(ws.active) else { return };
+        let Some(&id) = col.wins.get(col.active) else { return };
+        match to {
+            None => {
+                self.heights.remove(&id);
+            }
+            Some(v) => {
+                // What it has now, when it was sharing: an equal part of what the others left.
+                let (set, free): (Vec<f64>, Vec<WinId>) = (col.wins.iter().filter_map(|w| self.heights.get(w).copied()).collect(), col.wins.iter().copied().filter(|w| !self.heights.contains_key(w)).collect());
+                let now = self.heights.get(&id).copied().unwrap_or_else(|| ((1.0 - set.iter().sum::<f64>()) / free.len().max(1) as f64).max(0.1));
+                self.heights.insert(id, if by { now + v } else { v }.clamp(0.1, 1.0));
+            }
+        }
+        self.settle();
+    }
+
+    /// How tall each window of a column is, and how far down the first one starts, given
+    /// the height there is for windows (the gaps between them already taken off).
+    fn column_heights(&self, col: &Column, room: i32) -> (Vec<i32>, i32) {
+        let set: Vec<Option<f64>> = col.wins.iter().map(|w| self.heights.get(w).copied()).collect();
+        let asked: f64 = set.iter().flatten().sum();
+        let free = set.iter().filter(|h| h.is_none()).count();
+        // More asked for than there is: everyone gives a little.
+        let shrink = if asked > 1.0 || (free > 0 && asked > 0.9) { (if free > 0 { 0.9 } else { 1.0 }) / asked } else { 1.0 };
+        let left = room - set.iter().flatten().map(|h| (h * shrink * room as f64).round() as i32).sum::<i32>();
+        let mut out: Vec<i32> = set.iter().map(|h| h.map_or(left / free.max(1) as i32, |h| (h * shrink * room as f64).round() as i32).max(1)).collect();
+        if free > 0 {
+            // The last sharing window takes the pixels the division left over.
+            if let Some(i) = set.iter().rposition(|h| h.is_none()) {
+                out[i] = (out[i] + room - out.iter().sum::<i32>()).max(1);
+            }
+            return (out, 0);
+        }
+        let spare = (room - out.iter().sum::<i32>()).max(0);
+        (out, if self.opts.center_short_columns { spare / 2 } else { 0 })
     }
 
     pub fn toggle_maximized(&mut self) {
@@ -817,11 +862,11 @@ impl Layout {
             let x = area.x + o.gaps_out + ws.col_x(ci, area, o) - view.round() as i32;
             let n = col.wins.len() as i32;
             let room = area.h - 2 * o.gaps_out - o.gaps * (n - 1);
-            let h = (room / n).max(1);
+            let (heights, down) = self.column_heights(col, room);
+            let mut next = area.y + o.gaps_out + down;
             for (ri, id) in col.wins.iter().enumerate() {
-                let y = area.y + o.gaps_out + ri as i32 * (h + o.gaps);
-                // The last one takes the pixels the division left over.
-                let h = if ri as i32 == n - 1 { room - h * (n - 1) } else { h };
+                let (y, h) = (next, heights[ri]);
+                next += h + o.gaps;
                 let active = focused && ws.float_focus.is_none() && ci == ws.active && ri == col.active;
                 let mut rect = Rect::new(x + b, y + b, (w - 2 * b).max(1), (h - 2 * b).max(1));
                 let off = self.offsets.get(id).filter(|_| sliding);
@@ -907,6 +952,41 @@ mod tests {
 
     fn fs(_: WinId) -> (i32, i32) {
         (300, 200)
+    }
+
+    #[test]
+    fn a_shorter_window_sits_in_the_middle() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.finish_animations();
+        let rect = |l: &Layout, id| l.sizes(0, &fs).iter().find(|t| t.id == id).map(|t| (t.rect.y, t.rect.h)).unwrap();
+        // 600 high, 10 at each edge, a border of 2: 580 for the column.
+        assert_eq!(rect(&l, 1), (12, 576));
+        l.set_height(Some(0.5), false);
+        assert_eq!(rect(&l, 1), (10 + 145 + 2, 290 - 4));
+        l.set_height(Some(0.1), true);
+        assert_eq!(rect(&l, 1), (10 + 116 + 2, 348 - 4));
+        // At the top instead, when the settings say so.
+        l.set_options(Options { center_short_columns: false, ..l.opts.clone() });
+        assert_eq!(rect(&l, 1), (12, 348 - 4));
+        l.set_options(Options { center_short_columns: true, ..l.opts.clone() });
+
+        // A second window in the column takes what is left: nothing to centre.
+        l.add_window(2, false, None);
+        l.consume_or_expel(Dir::Left);
+        let (a, b) = (rect(&l, 1), rect(&l, 2));
+        assert_eq!((a.0, b.0 + b.1), (12, 588));
+        assert_eq!(a.1 + 4, (570.0_f64 * 0.6).round() as i32);
+        // Both with heights of their own: together in the middle.
+        l.set_height(Some(0.2), false);
+        let (a, b) = (rect(&l, 1), rect(&l, 2));
+        assert_eq!(a.0 - 12, 588 - (b.0 + b.1));
+        // And back to filling the column.
+        l.set_height(None, false);
+        l.focus(Dir::Up);
+        l.set_height(None, false);
+        let (a, b) = (rect(&l, 1), rect(&l, 2));
+        assert_eq!((a.0, b.0 + b.1, a.1), (12, 588, 281));
     }
 
     #[test]

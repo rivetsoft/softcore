@@ -91,6 +91,7 @@ pub const SETTINGS: &[Setting] = &[
     s("blur_layers", Group::Windows, "Shell surfaces to blur behind", "Their names, with commas between. A surface that asks for blur itself gets it without being named.", Kind::Text, "rivet-shell-panel,rivet-shell-dock"),
     s("column_widths", Group::Columns, "Column widths", "The widths the next-width key steps through, as parts of the screen.", Kind::Widths, "0.3333,0.5,0.6667"),
     s("default_width", Group::Columns, "A new column's width", "As a part of the screen.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "0.5"),
+    s("center_short_columns", Group::Columns, "Centre short columns", "A column made shorter than the screen sits in the middle of its height. Off: at the top.", Kind::Bool, "true"),
     s("theme", Group::Look, "Theme", "For Softcore's own panels and the colours it takes from Rivet.", Kind::Choice(&["system", "light", "dark"]), "system"),
     s("accent", Group::Look, "Accent", "Used when the desktop's colours aren't followed.", Kind::Color, "#3584e4"),
     s("follow_desktop_colors", Group::Look, "Follow the desktop's colours", "The colours Rivet Shell makes from the wallpaper.", Kind::Bool, "true"),
@@ -375,6 +376,7 @@ impl Config {
             "animations" => self.animations = boolean(),
             "animation_speed" => self.animation_speed = v.parse().unwrap_or(1.0),
             "column_widths" => self.layout.presets = widths(v).unwrap_or_default(),
+            "center_short_columns" => self.layout.center_short_columns = boolean(),
             "default_width" => self.layout.default_width = v.parse().unwrap_or(0.5),
             "theme" => {
                 self.theme = match v {
