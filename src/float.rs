@@ -6,7 +6,7 @@ use smithay::input::pointer::{CursorIcon, CursorImageStatus, MotionEvent};
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
 use crate::config::{Action, WidthChange};
-use crate::layout::{Dir, Float, Rect, WinId};
+use crate::layout::{Dir, Float, Rect, Spot, Tile, WinId};
 use crate::state::State;
 
 /// How far a key moves a floating window.
@@ -21,6 +21,76 @@ pub struct Drag {
     rect: Rect,
     /// The button press that began it was kept from the window, so its release is too.
     pub quiet: bool,
+    /// A window of the columns, picked up to be put down somewhere else among them: how it
+    /// was when picked up, and, once it has been carried a little way, where it would go
+    /// if let go of now and the mark that shows it (on the display named).
+    pub tiled: Option<Tile>,
+    pub spot: Option<(Spot, String, Rect)>,
+    pub mark: crate::render::Deco,
+    pub mark_id: smithay::backend::renderer::element::Id,
+}
+
+/// How far a picked-up window is carried before it counts as being moved.
+const CARRY: f64 = 12.0;
+
+/// How small a carried window is drawn, so what is under it shows.
+const CARRIED: f64 = 0.5;
+
+/// A carried window as it is drawn on a display: small, by the pointer where it was held.
+/// The window is taken out of `tiles`, where it stood.
+pub fn carried(state: &State, output: &smithay::output::Output, tiles: &mut Vec<Tile>) -> Option<Tile> {
+    let d = state.drag.as_ref()?;
+    let t = d.tiled.filter(|_| d.spot.is_some())?;
+    tiles.retain(|x| x.id != t.id);
+    let geo = State::output_geometry(output);
+    if !geo.to_f64().contains(state.pointer_pos) {
+        return None;
+    }
+    // The point it was held by stays under the pointer.
+    let (px, py) = (state.pointer_pos.x - geo.loc.x as f64, state.pointer_pos.y - geo.loc.y as f64);
+    let (hx, hy) = (d.from.x - d.rect.x as f64, d.from.y - d.rect.y as f64);
+    let rect = Rect::new((px - hx * CARRIED).round() as i32, (py - hy * CARRIED).round() as i32, ((t.rect.w as f64 * CARRIED).round() as i32).max(1), ((t.rect.h as f64 * CARRIED).round() as i32).max(1));
+    Some(Tile { rect, zoom: CARRIED, active: true, moving: false, resizing: false, tab: None, hidden: false, ..t })
+}
+
+/// Where a carried window would go if let go of now, and the mark for it: a bar between
+/// columns for a column of its own, half of a window for a place in that window's column.
+fn spot_at(state: &State, id: WinId) -> Option<(Spot, String, Rect)> {
+    let output = state.output_at(state.pointer_pos)?;
+    let name = output.name();
+    let mi = state.layout.monitor(&name)?;
+    let m = &state.layout.mons[mi];
+    let o = &state.layout.opts;
+    let vertical = m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, o));
+    let geo = State::output_geometry(output);
+    // Everything as if the strip ran across: turned for one that runs down.
+    let turn = |r: Rect| if vertical { Rect::new(r.y, r.x, r.h, r.w) } else { r };
+    let (px, py) = ((state.pointer_pos.x - geo.loc.x as f64).round() as i32, (state.pointer_pos.y - geo.loc.y as f64).round() as i32);
+    let (px, py) = if vertical { (py, px) } else { (px, py) };
+    let area = turn(m.area);
+    let tiles: Vec<(WinId, Rect)> = state.tiles(output).iter().filter(|t| !t.floating && !t.fullscreen && !t.hidden && t.id != id).map(|t| (t.id, turn(t.rect))).collect();
+    let (top, tall) = (area.y + o.gaps_out, (area.h - 2 * o.gaps_out).max(1));
+    let Some((near, r)) = tiles.iter().copied().min_by_key(|(_, r)| {
+        let dx = (r.x - px).max(px - (r.x + r.w)).max(0);
+        let dy = (r.y - py).max(py - (r.y + r.h)).max(0);
+        dx * dx + dy * dy
+    }) else {
+        return Some((Spot::Last(mi), name, turn(Rect::new(area.x + o.gaps_out, top, (area.w - 2 * o.gaps_out).max(1), tall))));
+    };
+    // The outer quarters of a column are for a column beside it, the middle for a place in it.
+    let edge = (r.w / 4).max(1);
+    let thick = o.gaps.max(8);
+    let reach = o.border + o.gaps / 2;
+    let (spot, mark) = if px < r.x + edge {
+        (Spot::Before(near), Rect::new(r.x - reach - thick / 2, top, thick, tall))
+    } else if px >= r.x + r.w - edge {
+        (Spot::After(near), Rect::new(r.x + r.w + reach - thick / 2, top, thick, tall))
+    } else if py < r.y + r.h / 2 {
+        (Spot::Above(near), Rect::new(r.x, r.y, r.w, r.h / 2))
+    } else {
+        (Spot::Below(near), Rect::new(r.x, r.y + r.h / 2, r.w, r.h - r.h / 2))
+    };
+    Some((spot, name, turn(mark)))
 }
 
 /// Where a floating window is on its display now, and the part of the display it has.
@@ -43,8 +113,17 @@ fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool, hold: 
 /// Begin moving or resizing a floating window with the pointer. `corner`: the edges to
 /// resize by; None picks the corner nearest the pointer.
 pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, bool)>, quiet: bool) -> bool {
-    let Some((rect, _)) = place(state, id) else { return false };
     let from = state.pointer_pos;
+    let Some((rect, _)) = place(state, id) else {
+        // A window of the columns: picked up, to be put down at another place among them.
+        let tile = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).and_then(|o| {
+            let origin = State::output_geometry(o).loc;
+            state.tiles(o).into_iter().find(|t| t.id == id && !t.floating && !t.fullscreen && !t.hidden).map(|t| (t, Rect::new(t.rect.x + origin.x, t.rect.y + origin.y, t.rect.w, t.rect.h)))
+        });
+        let Some((tile, rect)) = tile.filter(|_| !resize && !state.overview.on) else { return false };
+        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+        return true;
+    };
     let resize = resize.then(|| {
         corner.unwrap_or_else(|| {
             let origin = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).map(|o| State::output_geometry(o).loc).unwrap_or_default();
@@ -58,7 +137,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
         Some((true, false)) => CursorIcon::SwResize,
         Some((false, false)) => CursorIcon::SeResize,
     });
-    state.drag = Some(Drag { id, resize, from, rect, quiet });
+    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
     state.queue_redraw();
     true
 }
@@ -67,6 +146,20 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
 pub fn moved(state: &mut State) {
     let Some(d) = &state.drag else { return };
     let (id, r, resize) = (d.id, d.rect, d.resize);
+    if d.tiled.is_some() {
+        let far = (state.pointer_pos.x - d.from.x).hypot(state.pointer_pos.y - d.from.y) >= CARRY;
+        if d.spot.is_some() || far {
+            if d.spot.is_none() {
+                state.cursor_status = CursorImageStatus::Named(CursorIcon::Grabbing);
+            }
+            let spot = spot_at(state, id);
+            if let Some(d) = &mut state.drag {
+                // Off every display there is nowhere to go: the last place shown stands.
+                d.spot = spot.or(d.spot.take());
+            }
+        }
+        return;
+    }
     let (dx, dy) = ((state.pointer_pos.x - d.from.x).round() as i32, (state.pointer_pos.y - d.from.y).round() as i32);
     let Some(area) = state.layout.area_of(id).filter(|_| state.layout.is_floating(id)) else {
         end(state);
@@ -89,6 +182,11 @@ pub fn moved(state: &mut State) {
 /// and sets its own cursor again.
 pub fn end(state: &mut State) {
     let Some(d) = state.drag.take() else { return };
+    if let Some((spot, ..)) = d.spot {
+        state.layout.drop_window(d.id, spot);
+        state.layer_focus = None;
+        state.update_focus();
+    }
     // Where the window has ended up is where it is from now on, whatever size it settled at.
     if d.resize.is_some()
         && let Some((r, area)) = place(state, d.id)

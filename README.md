@@ -174,6 +174,16 @@ row. Workspaces, which sit one under the other beside sideways strips, sit side 
 here. The keys and action names stay as they are: `focus-column-left` means left on the
 screen, and `consume-or-expel-window-left` means towards the row before.
 
+## Moving a window with the pointer
+
+Mod and the left button picks a window up out of its column (a window's own title bar does
+too, when it has one). It is drawn small by the pointer, and a mark in the accent colour
+shows where it would go if let go of: a bar between two columns for a column of its own
+there, or the upper or lower half of a window for a place above or below it in that
+window's column (which adds a tab to a tabbed one). The outer quarters of a column are for
+the bar, the middle for a place in it. On another display it goes to the workspace in view
+there. Let go where it started, or before it has gone anywhere, and nothing moves.
+
 ## Full screen
 
 Mod+Shift+F (`fullscreen-window`) gives the focused window the whole display, over the
@@ -380,8 +390,8 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   which is showing, not what they are. In the overview, dragging a window to
   another workspace, a corner of the screen that opens it, and a touchpad gesture for it.
   A dialog opens in the
-  middle of the screen, not over its parent, and a window in a column can't be dragged
-  out of it with the pointer. Scratchpads with names of their own, and one that starts its program when
+  middle of the screen, not over its parent. A window carried by the pointer can't be
+  taken to a workspace out of view, or let go of as a floating window. Scratchpads with names of their own, and one that starts its program when
   first asked for, wait for window rules.
 - Clipping a window's own corners: the border is drawn over them, which reads as rounded,
   but a window with no border has square corners.

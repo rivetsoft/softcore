@@ -256,6 +256,19 @@ pub struct Float {
     pub hold: (bool, bool),
 }
 
+/// Where a window let go of with the pointer goes: by a window that is already there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spot {
+    /// A column of its own, before that window's column, or after it.
+    Before(WinId),
+    After(WinId),
+    /// Into that window's column, above it or below.
+    Above(WinId),
+    Below(WinId),
+    /// The last column of the workspace in view on a display (by its place among them).
+    Last(usize),
+}
+
 /// Between two pieces of a strip of tabs.
 const TAB_GAP: i32 = 4;
 
@@ -757,6 +770,52 @@ impl Layout {
         } else if ws.fullscreen == Some(id) {
             ws.fullscreen = None;
         }
+        self.settle();
+    }
+
+    /// Take a tiled window from where it is and put it down at a spot; it has the focus there.
+    pub fn drop_window(&mut self, id: WinId, spot: Spot) {
+        let Some((mi, wi)) = self.find(id) else { return };
+        if matches!(spot, Spot::Before(a) | Spot::After(a) | Spot::Above(a) | Spot::Below(a) if a == id) || self.mons[mi].wss[wi].floating.contains(&id) {
+            return;
+        }
+        // A window that had a column to itself keeps that column's width.
+        let from = &self.mons[mi].wss[wi];
+        let alone = from.cols.iter().find(|c| c.wins == [id]).map(|c| (c.width, c.maximized));
+        let (width, maximized) = alone.unwrap_or((self.opts.default_width, false));
+        let col = Column { wins: vec![id], active: 0, width, maximized, tabbed: false };
+        self.mons[mi].wss[wi].remove(id);
+        self.heights.remove(&id);
+        let (tm, tw) = match spot {
+            Spot::Last(m) if m < self.mons.len() => (m, self.mons[m].active),
+            Spot::Before(a) | Spot::After(a) | Spot::Above(a) | Spot::Below(a) if self.find(a).is_some() => self.find(a).unwrap(),
+            // Nowhere to go after all: back as a column where it was.
+            _ => (mi, wi.min(self.mons[mi].wss.len() - 1)),
+        };
+        let ws = &mut self.mons[tm].wss[tw];
+        let anchor = |ws: &Workspace, a: WinId| ws.cols.iter().enumerate().find_map(|(c, col)| col.wins.iter().position(|w| *w == a).map(|r| (c, r)));
+        match spot {
+            Spot::Before(a) | Spot::After(a) if anchor(ws, a).is_some() => {
+                let at = anchor(ws, a).unwrap().0 + usize::from(matches!(spot, Spot::After(_)));
+                ws.cols.insert(at, col);
+                ws.active = at;
+            }
+            Spot::Above(a) | Spot::Below(a) if anchor(ws, a).is_some() => {
+                let (c, r) = anchor(ws, a).unwrap();
+                let at = r + usize::from(matches!(spot, Spot::Below(_)));
+                ws.cols[c].wins.insert(at, id);
+                ws.cols[c].active = at;
+                ws.active = c;
+            }
+            _ => {
+                ws.cols.push(col);
+                ws.active = ws.cols.len() - 1;
+            }
+        }
+        ws.float_focus = None;
+        ws.fullscreen = None;
+        self.active_mon = tm;
+        self.mons[tm].active = tw;
         self.settle();
     }
 
@@ -1423,6 +1482,29 @@ mod tests {
         l.set_fullscreen(3, Some(true));
         l.finish_animations();
         assert_eq!(l.tiles(1, &fs).iter().map(|t| (t.id, t.rect)).collect::<Vec<_>>(), vec![(3, Rect::new(0, 0, 800, 600))]);
+    }
+
+    #[test]
+    fn a_window_is_put_down_by_another() {
+        let mut l = layout();
+        for id in 1..=3 {
+            l.add_window(id, false, None);
+        }
+        let cols = |l: &Layout| l.active_workspace().unwrap().cols.iter().map(|c| c.wins.clone()).collect::<Vec<_>>();
+        l.drop_window(3, Spot::Before(1));
+        assert_eq!((cols(&l), l.active_window()), (vec![vec![3], vec![1], vec![2]], Some(3)));
+        l.drop_window(3, Spot::Below(2));
+        assert_eq!((cols(&l), l.active_window()), (vec![vec![1], vec![2, 3]], Some(3)));
+        l.drop_window(2, Spot::Above(1));
+        assert_eq!(cols(&l), vec![vec![2, 1], vec![3]]);
+        l.drop_window(2, Spot::After(3));
+        assert_eq!(cols(&l), vec![vec![1], vec![3], vec![2]]);
+        // On itself, nothing; onto another display, its last column.
+        l.drop_window(2, Spot::Above(2));
+        assert_eq!(cols(&l), vec![vec![1], vec![3], vec![2]]);
+        l.add_monitor("B", (800, 600));
+        l.drop_window(1, Spot::Last(1));
+        assert_eq!((l.active_mon, cols(&l)), (1, vec![vec![1]]));
     }
 
     #[test]

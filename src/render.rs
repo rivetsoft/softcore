@@ -525,6 +525,24 @@ fn closing_elements(state: &mut State, renderer: &mut GlesRenderer, output: &Out
     state.closing = closing;
 }
 
+/// Where a carried window would be put down: an outline in the accent, faintly filled.
+fn spot_elements(state: &mut State, output: &str, scale: Scale<f64>, out: &mut Vec<Elem>) {
+    let Some(mut d) = state.drag.take() else { return };
+    if let Some((_, _, r)) = d.spot.as_ref().filter(|s| s.1 == output)
+        && let Some(shaders) = state.shaders.as_ref()
+    {
+        let look = state.ui.look(&state.config);
+        let w = 2;
+        let inner = Rect::new(r.x + w, r.y + w, (r.w - 2 * w).max(1), (r.h - 2 * w).max(1));
+        out.push(d.mark.border(shaders, BorderKey { rect: inner, color: look.active, color2: look.active, angle: 0, width: w, radius: look.radius.min(r.w / 2).min(r.h / 2), alpha: 1.0 }));
+        let a = 0.25;
+        let rgba = [look.active[0] as f32 / 255.0 * a, look.active[1] as f32 / 255.0 * a, look.active[2] as f32 / 255.0 * a, a];
+        let geo: Rectangle<i32, Physical> = Rectangle::<i32, Logical>::new((r.x, r.y).into(), (r.w, r.h).into()).to_physical_precise_round(scale);
+        out.push(Elem::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(d.mark_id.clone(), geo, smithay::backend::renderer::utils::CommitCounter::default(), rgba, Kind::Unspecified)));
+    }
+    state.drag = Some(d);
+}
+
 /// Everything on a display, top first, and the colour behind it all.
 pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output, cursor: bool, panels: bool) -> (Vec<Elem>, [f32; 4]) {
     let scale = Scale::from(output.current_scale().fractional_scale());
@@ -557,8 +575,14 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
 
     let bg = state.ui.look(&state.config).background;
     let clear = [bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0, 1.0];
-    let tiles = state.tiles(output);
+    let mut tiles = state.tiles(output);
     let name = output.name();
+    // A window being carried by the pointer, over everything, and the mark of where it
+    // would be put down.
+    if let Some(t) = crate::float::carried(state, output, &mut tiles) {
+        window_elements(state, renderer, &t, scale, None, &mut out);
+    }
+    spot_elements(state, &name, scale, &mut out);
     let programs = state.blur.programs.clone().filter(|_| state.config.blur);
     let mut behind = state.blur.outputs.remove(&name).unwrap_or_default();
     let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
