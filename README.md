@@ -55,10 +55,12 @@ and anything it draws itself goes through them:
 The crates are pinned to a commit in `Cargo.toml`. To build against a checkout of the apps
 repository instead, copy `.cargo/config.toml.example` to `.cargo/config.toml` and set the path.
 
-Rivet Shell runs under Softcore today (panels, dock, wallpaper, launcher: they are layer-shell
-surfaces), but doesn't know Softcore by name yet, so its workspaces item and window look
-settings do nothing here. `softcore msg` answers with the same fields `niri msg` does, so
-teaching the shell is a matter of a new `Compositor::Softcore` that runs `softcore msg`.
+Rivet Shell runs under Softcore (panels, dock, wallpaper, launcher: they are layer-shell
+surfaces). Its workspaces item, window title, dock and log out work once the shell knows
+Softcore by name: a `Compositor::Softcore` that asks `softcore msg` what it asks `niri msg`,
+since the answers have the same fields. Softcore puts itself on the PATH of what it starts,
+so `softcore msg` is found wherever Softcore was started from. The shell's window look
+settings do nothing here: Softcore has its own settings file.
 
 ## Settings
 

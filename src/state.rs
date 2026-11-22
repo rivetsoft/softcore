@@ -678,10 +678,30 @@ impl State {
         for k in ["NIRI_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "DISPLAY"] {
             c.env_remove(k);
         }
+        // What Softcore starts can ask it things with `softcore msg` (Rivet Shell does, for
+        // its workspaces), wherever this Softcore was started from.
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            if !std::env::split_paths(&path).any(|p| p == dir)
+                && let Ok(joined) = std::env::join_paths(std::env::split_paths(&path).chain([dir]))
+            {
+                c.env("PATH", joined);
+            }
+        }
         for (k, v) in &self.config.env {
             c.env(k, v);
         }
         c.stdin(std::process::Stdio::null());
+        // Softcore doesn't wait for what it starts (see main), and a program started that way
+        // would inherit not being able to wait for anything either: every command it ran
+        // itself would seem to fail. Give it back the usual way.
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            c.pre_exec(|| {
+                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+                Ok(())
+            });
+        }
         if let Err(e) = c.spawn() {
             tracing::warn!("couldn't run {command:?}: {e}");
         }
