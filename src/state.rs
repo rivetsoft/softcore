@@ -108,6 +108,7 @@ pub struct State {
     pub nested: bool,
     /// The X11 display kept for xwayland-satellite, if there is one.
     pub x11: Option<crate::xwayland::X11>,
+    pub workspaces: crate::workspaces::Workspaces,
 
     pub config: Config,
     pub layout: Layout,
@@ -224,6 +225,7 @@ impl State {
         SinglePixelBufferState::new::<State>(&dh);
         CursorShapeManagerState::new::<State>(&dh);
         IdleInhibitManagerState::new::<State>(&dh);
+        crate::workspaces::init(&dh);
         // Surfaces may say which part of themselves wants blur behind it.
         smithay::wayland::background_effect::BackgroundEffectState::new::<State>(&dh);
         // Typing and pointing by programs: on-screen keyboards, remote control, checks.
@@ -251,6 +253,7 @@ impl State {
             socket,
             nested,
             x11: None,
+            workspaces: Default::default(),
             layout,
             wins: HashMap::new(),
             unmapped: Vec::new(),
@@ -643,6 +646,7 @@ impl State {
         crate::cast::refresh(self);
         crate::picker::refresh(self);
         crate::ipc::notify(self);
+        crate::workspaces::refresh(self);
         let _ = self.dh.flush_clients();
     }
 

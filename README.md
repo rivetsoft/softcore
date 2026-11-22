@@ -379,9 +379,14 @@ Softcore puts them, not where it asks.
 
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
 selection and data-control, drag and drop, idle notify and idle inhibit, xdg-activation,
-foreign-toplevel-list, screen capture (ext-image-copy-capture, of displays and of windows),
+foreign-toplevel-list, ext-workspace (see below), screen capture (ext-image-copy-capture, of displays and of windows),
 virtual keyboards and pointers, blur behind a surface (ext-background-effect), fractional scale, viewporter,
 cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dmabuf).
+
+A bar or dock that isn't Rivet's can list and switch workspaces through ext-workspace-v1.
+Each display is a group, and its workspaces are named by their place in the stack (1, 2, …),
+the empty last one included. A client can ask for a workspace to be shown; making, removing
+and moving workspaces aren't offered, as Softcore makes and drops them itself.
 
 ## What isn't built yet
 

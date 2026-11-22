@@ -20,6 +20,7 @@ mod settings_cli;
 mod state;
 mod udev;
 mod watch;
+mod workspaces;
 mod xwayland;
 mod ui;
 
