@@ -186,6 +186,17 @@ impl State {
         self.queue_redraw();
     }
 
+    /// The window whose piece of a strip of tabs is at a point.
+    fn tab_under(&self, pos: Point<f64, Logical>) -> Option<crate::layout::WinId> {
+        let output = self.output_at(pos)?;
+        if self.layer_under(pos).is_some_and(|l| matches!(l.layer(), smithay::wayland::shell::wlr_layer::Layer::Top | smithay::wayland::shell::wlr_layer::Layer::Overlay)) {
+            // A panel or a menu over the strip.
+            return None;
+        }
+        let at = pos - State::output_geometry(output).loc.to_f64();
+        self.tiles(output).iter().find(|t| t.tab.is_some_and(|r| at.x >= r.x as f64 && at.x < (r.x + r.w) as f64 && at.y >= r.y as f64 && at.y < (r.y + r.h) as f64)).map(|t| t.id)
+    }
+
     /// A click gives the keyboard to what was clicked: a window, or a panel that takes keys.
     fn clicked(&mut self, pos: Point<f64, Logical>) {
         if self.ui.panel == Panel::Share {
@@ -197,7 +208,7 @@ impl State {
         if let Some(name) = self.output_at(pos).map(|o| o.name()) {
             self.layout.set_active_monitor(&name);
         }
-        if let Some(id) = self.window_under(pos) {
+        if let Some(id) = self.tab_under(pos).or_else(|| self.window_under(pos)) {
             self.layout.focus_window(id);
             self.layer_focus = None;
         } else {

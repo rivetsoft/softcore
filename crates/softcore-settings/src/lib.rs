@@ -47,6 +47,8 @@ pub struct Options {
     pub scratchpad_size: f64,
     /// Which way the strip of windows runs.
     pub scroll: Scroll,
+    /// How thick the strip of tabs over a tabbed column is.
+    pub tab_bar: i32,
 }
 
 /// Which way a strip of windows runs, and so which way it scrolls.
@@ -74,7 +76,7 @@ impl Scroll {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7, scroll: Scroll::Horizontal }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7, scroll: Scroll::Horizontal, tab_bar: 8 }
     }
 }
 
@@ -100,6 +102,8 @@ pub enum Action {
     SetWindowHeight(WidthChange),
     ResetWindowHeight,
     MaximizeColumn,
+    /// A column's windows one over the other, one showing at a time, or side by side again.
+    ToggleTabbed,
     FullscreenWindow,
     CenterColumn,
     ToggleFloating,
@@ -158,6 +162,7 @@ impl Action {
             "set-window-height" => Action::SetWindowHeight(parse_width(name, rest)?),
             "reset-window-height" => Action::ResetWindowHeight,
             "maximize-column" => Action::MaximizeColumn,
+            "toggle-column-tabbed-display" => Action::ToggleTabbed,
             "fullscreen-window" => Action::FullscreenWindow,
             "center-column" => Action::CenterColumn,
             "toggle-window-floating" => Action::ToggleFloating,
@@ -209,6 +214,7 @@ impl Action {
             Action::SetWindowHeight(_) => "Taller window".into(),
             Action::ResetWindowHeight => "Window as tall as there is room".into(),
             Action::MaximizeColumn => "Column as wide as the screen".into(),
+            Action::ToggleTabbed => "The windows of the column as tabs, or all showing".into(),
             Action::FullscreenWindow => "Full screen".into(),
             Action::CenterColumn => "Centre the column".into(),
             Action::ToggleFloating => "Float the window, or put it back".into(),
@@ -420,6 +426,7 @@ Mod+Shift+Minus set-window-height -10%
 Mod+Shift+Equal set-window-height +10%
 Mod+Ctrl+R reset-window-height
 Mod+F maximize-column
+Mod+W toggle-column-tabbed-display
 Mod+Shift+F fullscreen-window
 Mod+C center-column
 Mod+V toggle-window-floating

@@ -337,7 +337,31 @@ fn scaled(r: Rect, by: f64) -> Rect {
     Rect::new(r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
 }
 
+/// A window's piece of its column's strip of tabs: the accent for the one with the focus,
+/// fainter for the one showing in a column without it, fainter still for the others.
+fn tab_element(state: &mut State, t: &Tile, scale: Scale<f64>, out: &mut Vec<Elem>) {
+    let Some(r) = t.tab else { return };
+    let look = state.ui.look(&state.config);
+    let color = match (t.active, t.hidden) {
+        (true, _) => [look.active[0], look.active[1], look.active[2], 255],
+        (false, false) => [look.active[0], look.active[1], look.active[2], 150],
+        (false, true) => [look.active[0], look.active[1], look.active[2], 70],
+    };
+    let Some(win) = state.wins.get_mut(&t.id) else { return };
+    if win.tab.as_ref().is_none_or(|(_, c)| *c != color) {
+        win.tab = Some((Id::new(), color));
+    }
+    let a = color[3] as f32 / 255.0;
+    let rgba = [color[0] as f32 / 255.0 * a, color[1] as f32 / 255.0 * a, color[2] as f32 / 255.0 * a, a];
+    let geo: Rectangle<i32, Physical> = Rectangle::<i32, Logical>::new((r.x, r.y).into(), (r.w, r.h).into()).to_physical_precise_round(scale);
+    out.push(Elem::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(win.tab.as_ref().unwrap().0.clone(), geo, smithay::backend::renderer::utils::CommitCounter::default(), rgba, Kind::Unspecified)));
+}
+
 fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, scale: Scale<f64>, wall: Option<&mut Backdrop>, out: &mut Vec<Elem>) {
+    tab_element(state, t, scale, out);
+    if t.hidden {
+        return;
+    }
     let Some(mut win) = state.wins.remove(&t.id) else { return };
     if let Some(surface) = win.window.toplevel().map(|t| t.wl_surface().clone()) {
         let geo = win.window.geometry();
@@ -415,7 +439,7 @@ pub fn start_closing(state: &mut State, id: WinId) {
         return;
     }
     let Some(output) = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).cloned() else { return };
-    let Some(t) = state.tiles(&output).into_iter().find(|t| t.id == id) else { return };
+    let Some(t) = state.tiles(&output).into_iter().find(|t| t.id == id && !t.hidden) else { return };
     remember(state, id);
     let Some(texture) = state.wins.get_mut(&id).and_then(|w| w.picture.take()) else { return };
     let look = state.ui.look(&state.config);
@@ -577,7 +601,7 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
 /// told once a second, so they keep working without drawing at full speed.
 pub fn frame_done(state: &State, output: &Output) {
     let time = state.start.elapsed();
-    let visible: Vec<_> = state.tiles(output).iter().map(|t| t.id).collect();
+    let visible: Vec<_> = state.tiles(output).iter().filter(|t| !t.hidden).map(|t| t.id).collect();
     let to = |_: &WlSurface, _: &smithay::wayland::compositor::SurfaceData| Some(output.clone());
     for (id, win) in &state.wins {
         if win.output.as_deref() != Some(output.name().as_str()) {

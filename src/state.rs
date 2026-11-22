@@ -77,6 +77,8 @@ pub struct Win {
     /// The display it was last told it is on.
     pub output: Option<String>,
     pub deco: crate::render::Deco,
+    /// Its piece of a strip of tabs, as last drawn: kept while the colour is the same.
+    pub tab: Option<(smithay::backend::renderer::element::Id, [u8; 4])>,
     /// How far it has faded in since it appeared, from 0 to 1.
     pub shown: f64,
     /// Its last frame, taken as it leaves, to fade out with.
@@ -462,7 +464,7 @@ impl State {
                 }
             });
         }
-        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
+        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
         self.layout.add_window(id, floating, None);
         self.layer_focus = None;
         self.queue_redraw();
@@ -797,6 +799,7 @@ impl State {
             Action::SetWindowHeight(WidthChange::To(h)) => self.layout.set_height(Some(h), false),
             Action::ResetWindowHeight => self.layout.set_height(None, false),
             Action::MaximizeColumn => self.layout.toggle_maximized(),
+            Action::ToggleTabbed => self.layout.toggle_tabbed(),
             Action::FullscreenWindow => {
                 if let Some(id) = active {
                     self.layout.set_fullscreen(id, None);
@@ -896,7 +899,7 @@ impl State {
         }
         let tiles = self.tiles(output);
         let window_under = |fullscreen: bool| {
-            tiles.iter().rev().filter(|t| t.fullscreen == fullscreen).find_map(|t| {
+            tiles.iter().rev().filter(|t| t.fullscreen == fullscreen && !t.hidden).find_map(|t| {
                 let w = &self.wins.get(&t.id)?.window;
                 let loc = Point::<i32, Logical>::from((t.rect.x, t.rect.y)) - w.geometry().loc;
                 w.surface_under(local - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + loc).to_f64() + origin))

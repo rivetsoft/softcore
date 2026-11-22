@@ -73,7 +73,7 @@ impl State {
             .layout
             .all_tiles(mi, &self.float_size())
             .into_iter()
-            .map(|(ws, t)| Tile { rect: map.place(ws, t.rect), zoom: map.zoom, border: t.border && !t.fullscreen, fullscreen: false, ..t })
+            .map(|(ws, t)| Tile { rect: map.place(ws, t.rect), tab: t.tab.map(|r| map.place(ws, r)), zoom: map.zoom, border: t.border && !t.fullscreen, fullscreen: false, ..t })
             .collect();
         out.retain(|t| t.rect.intersects(&screen));
         out
@@ -99,7 +99,7 @@ pub fn clicked(state: &mut State, pos: Point<f64, Logical>) {
         let local = pos - State::output_geometry(&output).loc.to_f64();
         let inside = |r: &Rect| local.x >= r.x as f64 && local.x < (r.x + r.w) as f64 && local.y >= r.y as f64 && local.y < (r.y + r.h) as f64;
         state.layout.set_active_monitor(&output.name());
-        if let Some(t) = state.tiles(&output).iter().rev().find(|t| inside(&t.rect)) {
+        if let Some(t) = state.tiles(&output).iter().rev().find(|t| !t.hidden && inside(&t.rect)) {
             state.layout.focus_window(t.id);
         } else if let Some(mi) = state.layout.monitor(&output.name()) {
             let m = &state.layout.mons[mi];

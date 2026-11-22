@@ -43,6 +43,8 @@ pub struct Column {
     pub width: f64,
     /// As wide as the screen allows, until toggled back.
     pub maximized: bool,
+    /// Its windows are tabs: each has the whole column, and only the active one shows.
+    pub tabbed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -221,6 +223,11 @@ pub struct Tile {
     pub resizing: bool,
     /// Drawn this much smaller than it is (in the overview). 1: as it is.
     pub zoom: f64,
+    /// In a tabbed column: its piece of the strip of tabs.
+    pub tab: Option<Rect>,
+    /// A tab that isn't the one showing: it has its size and its piece of the strip, and
+    /// isn't drawn.
+    pub hidden: bool,
 }
 
 /// Where a floating window was put and the size it was given, when it was: until then it
@@ -234,6 +241,9 @@ pub struct Float {
     /// stays put, whatever size the window itself has got to so far.
     pub hold: (bool, bool),
 }
+
+/// Between two pieces of a strip of tabs.
+const TAB_GAP: i32 = 4;
 
 /// How much of a floating window always stays on its display, to take hold of.
 const HOLD: i32 = 48;
@@ -441,7 +451,7 @@ impl Layout {
             ws.floating.push(id);
             ws.float_focus = Some(id);
         } else {
-            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false });
+            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false });
         }
         self.settle();
     }
@@ -591,7 +601,7 @@ impl Layout {
             let id = c.wins.remove(c.active);
             c.active = c.active.min(c.wins.len() - 1);
             let at = if dir == Dir::Left { a } else { a + 1 };
-            ws.cols.insert(at, Column { wins: vec![id], active: 0, width, maximized: false });
+            ws.cols.insert(at, Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false });
             ws.active = at;
         } else {
             let to = match dir {
@@ -677,6 +687,14 @@ impl Layout {
         }
         let spare = (room - out.iter().sum::<i32>()).max(0);
         (out, if self.opts.center_short_columns { spare / 2 } else { 0 })
+    }
+
+    /// The focused column's windows as tabs, or all showing again.
+    pub fn toggle_tabbed(&mut self) {
+        let Some(ws) = self.ws() else { return };
+        let Some(c) = ws.cols.get_mut(ws.active) else { return };
+        c.tabbed = !c.tabbed;
+        self.settle();
     }
 
     pub fn toggle_maximized(&mut self) {
@@ -797,7 +815,7 @@ impl Layout {
             let ws = &mut self.mons[mi].wss[wi];
             ws.floating.retain(|w| *w != id);
             ws.float_focus = None;
-            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false });
+            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false });
         } else {
             ws.remove(id);
             ws.floating.push(id);
@@ -852,7 +870,7 @@ impl Layout {
             } else {
                 let id = ws.cols[a].wins[ws.cols[a].active];
                 ws.remove(id);
-                Column { wins: vec![id], active: 0, width, maximized: false }
+                Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false }
             };
             m.wss[to].insert_column(col);
         }
@@ -1055,22 +1073,36 @@ impl Layout {
             let x = area.x + o.gaps_out + ws.col_x(ci, area, o) - view.round() as i32;
             let n = col.wins.len() as i32;
             let room = area.h - 2 * o.gaps_out - o.gaps * (n - 1);
-            let (heights, down) = self.column_heights(col, room);
+            // Tabs: a strip across the top, and under it every window has the whole column.
+            let strip = o.tab_bar + (o.gaps / 2).max(2);
+            let (heights, down) = if col.tabbed { (vec![(area.h - 2 * o.gaps_out - strip).max(1); col.wins.len()], strip) } else { self.column_heights(col, room) };
             let mut next = area.y + o.gaps_out + down;
             for (ri, id) in col.wins.iter().enumerate() {
                 let (y, h) = (next, heights[ri]);
-                next += h + o.gaps;
+                if !col.tabbed {
+                    next += h + o.gaps;
+                }
                 let active = focused && ws.float_focus.is_none() && ci == ws.active && ri == col.active;
                 let mut rect = Rect::new(x + b, y + b, (w - 2 * b).max(1), (h - 2 * b).max(1));
+                // Its piece of the strip, a little room between the pieces.
+                let mut tab = col.tabbed.then(|| {
+                    let edge = |i: i32| x + (w + TAB_GAP) * i / n;
+                    Rect::new(edge(ri as i32), area.y + o.gaps_out, (edge(ri as i32 + 1) - TAB_GAP - edge(ri as i32)).max(1), o.tab_bar)
+                });
                 if vertical {
                     rect = turned(rect);
+                    tab = tab.map(turned);
+                }
+                // The strip goes along with a column that is sliding to its place.
+                if let (Some(t), Some(o)) = (&mut tab, self.offsets.get(id).filter(|_| sliding)) {
+                    if vertical { t.y += o[1].round() as i32 } else { t.x += o[0].round() as i32 }
                 }
                 let off = self.offsets.get(id).filter(|_| sliding);
                 if let Some(o) = off {
                     rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
                 }
                 if ws.fullscreen != Some(*id) {
-                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0), zoom: 1.0 });
+                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0), zoom: 1.0, tab, hidden: col.tabbed && ri != col.active });
                 }
             }
         }
@@ -1091,11 +1123,11 @@ impl Layout {
             let y = y.min(area.y + area.h - HOLD).max(area.y);
             let rect = Rect::new(x, y, w, h);
             if ws.fullscreen != Some(*id) {
-                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0 });
+                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0, tab: None, hidden: false });
             }
         }
         if let Some(id) = ws.fullscreen {
-            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false, zoom: 1.0 });
+            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false, zoom: 1.0, tab: None, hidden: false });
         }
     }
 
@@ -1119,6 +1151,10 @@ impl Layout {
             for t in &mut out[start..] {
                 t.rect.x += dx;
                 t.rect.y += dy;
+                if let Some(tab) = &mut t.tab {
+                    tab.x += dx;
+                    tab.y += dy;
+                }
             }
         }
         out.retain(|t| t.rect.intersects(&screen));
@@ -1241,6 +1277,30 @@ mod tests {
         assert_eq!(l.mons[0].active, 0);
         // Every workspace's windows, for the overview: both of these on the first.
         assert_eq!(l.all_tiles(0, &fs).iter().map(|(ws, t)| (*ws, t.id)).collect::<Vec<_>>(), vec![(0, 1), (0, 2)]);
+    }
+
+    #[test]
+    fn a_tabbed_column_shows_one_window() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.consume_or_expel(Dir::Left);
+        l.toggle_tabbed();
+        l.finish_animations();
+        let t = l.tiles(0, &fs);
+        // Both have the whole column under the strip: 600 high, 10 at each edge, a strip of
+        // 8 and 5 under it. The second, focused, is the one showing.
+        assert_eq!(t.iter().map(|t| (t.id, t.rect, t.hidden)).collect::<Vec<_>>(), vec![(1, Rect::new(12, 25, 481, 563), true), (2, Rect::new(12, 25, 481, 563), false)]);
+        // The strip: the column's 485 in two pieces with 4 between.
+        assert_eq!(t.iter().map(|t| t.tab.unwrap()).collect::<Vec<_>>(), vec![Rect::new(10, 10, 240, 8), Rect::new(254, 10, 241, 8)]);
+        // Up is the tab before.
+        l.focus(Dir::Up);
+        assert_eq!(l.active_window(), Some(1));
+        assert!(l.tiles(0, &fs).iter().all(|t| t.hidden == (t.id == 2)));
+        // And all showing again.
+        l.toggle_tabbed();
+        l.finish_animations();
+        assert!(l.tiles(0, &fs).iter().all(|t| !t.hidden && t.tab.is_none() && t.rect.h == 281));
     }
 
     #[test]

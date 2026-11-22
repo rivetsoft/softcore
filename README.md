@@ -135,7 +135,7 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `border_active_to`, `border_inactive_to`, `border_angle`,
 `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
-`animation_speed`, `scroll`, `overview_zoom`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
+`animation_speed`, `scroll`, `overview_zoom`, `tab_bar`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -159,6 +159,16 @@ windows sharing a row; a column's width settings (`default_width`, `column_width
 row. Workspaces, which sit one under the other beside sideways strips, sit side by side
 here. The keys and action names stay as they are: `focus-column-left` means left on the
 screen, and `consume-or-expel-window-left` means towards the row before.
+
+## Tabs
+
+Mod+W (`toggle-column-tabbed-display`, niri's name for it) makes tabs of the focused
+column's windows: each has the whole column, one shows, and a strip across the top has a
+piece for each, the one showing brightest. Up and down go from tab to tab, and a click on a
+piece of the strip shows its window; the keys that move a window up and down its column
+change the order, and the ones that take a window into or out of a column add and remove
+tabs. Mod+W again shows them all. `tab_bar` is the strip's thickness. Where windows scroll
+up and down, a row's tabs are a strip down its left.
 
 ## The overview
 
@@ -339,7 +349,8 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   until there are window rules. Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
 - Animations for floating windows and for going fullscreen and back, which jump.
-- Window rules, named workspaces, tabbed columns. In the overview, dragging a window to
+- Window rules, named workspaces. Titles on the tabs: the strip shows how many there are and
+  which is showing, not what they are. In the overview, dragging a window to
   another workspace, a corner of the screen that opens it, and a touchpad gesture for it.
   A dialog opens in the
   middle of the screen, not over its parent, and a window in a column can't be dragged
