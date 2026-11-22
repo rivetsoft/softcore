@@ -58,6 +58,15 @@ impl ClientData for ClientState {
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
+/// A display that is there and not in use.
+pub struct OffOutput {
+    pub name: String,
+    pub make: String,
+    pub model: String,
+    /// Width, height, refresh in mHz, and whether it is the display's own choice.
+    pub modes: Vec<(i32, i32, i32, bool)>,
+}
+
 /// Marks a surface whose commits are already watched for it leaving.
 struct Watched;
 
@@ -131,6 +140,9 @@ pub struct State {
     pub blur: crate::blur::Blur,
     /// A floating window being moved or resized with the pointer.
     pub drag: Option<crate::float::Drag>,
+    /// Displays that are plugged in and turned off in the settings: still listed, so they
+    /// can be turned on again.
+    pub off_outputs: Vec<OffOutput>,
     /// The window that gets every key while it has the focus, Softcore's own bindings
     /// included (all but the one that takes them back): a compositor being tried out in a
     /// window, a remote desktop, a virtual machine.
@@ -257,6 +269,7 @@ impl State {
             watch: None,
             blur: Default::default(),
             drag: None,
+            off_outputs: Vec::new(),
             all_keys: None,
             casts: Default::default(),
             picker: None,
@@ -311,12 +324,29 @@ impl State {
         Rectangle::new(output.current_location(), Self::output_size(output))
     }
 
+    /// The way the settings turn a display. Not a window on another desktop: its picture
+    /// has a way up of its own.
+    fn rule_transform(output: &Output, rule: Option<&crate::config::OutputRule>) -> Option<smithay::utils::Transform> {
+        use smithay::utils::Transform as T;
+        let (turn, flip) = rule?.transform.filter(|_| output.name() != "winit")?;
+        Some(match (flip, turn) {
+            (false, 90) => T::_90,
+            (false, 180) => T::_180,
+            (false, 270) => T::_270,
+            (true, 90) => T::Flipped90,
+            (true, 180) => T::Flipped180,
+            (true, 270) => T::Flipped270,
+            (true, _) => T::Flipped,
+            (false, _) => T::Normal,
+        })
+    }
+
     pub fn add_output(&mut self, output: Output) {
         let rule = self.config.outputs.iter().find(|r| r.name == output.name()).cloned();
         let x = self.outputs.iter().map(|o| Self::output_geometry(o)).map(|g| g.loc.x + g.size.w).max().unwrap_or(0);
         let loc = rule.as_ref().and_then(|r| r.position).unwrap_or((x, 0));
         let scale = rule.as_ref().and_then(|r| r.scale).map(smithay::output::Scale::Fractional);
-        output.change_current_state(None, None, scale, Some(loc.into()));
+        output.change_current_state(None, Self::rule_transform(&output, rule.as_ref()), scale, Some(loc.into()));
         let size = Self::output_size(&output);
         self.layout.add_monitor(&output.name(), (size.w, size.h));
         if self.outputs.is_empty() {
@@ -668,9 +698,16 @@ impl State {
         }
         for o in self.outputs.clone() {
             if let Some(r) = self.config.outputs.iter().find(|r| r.name == o.name()).cloned() {
-                o.change_current_state(None, None, r.scale.map(smithay::output::Scale::Fractional), r.position.map(Into::into));
+                o.change_current_state(None, Self::rule_transform(&o, Some(&r)), r.scale.map(smithay::output::Scale::Fractional), r.position.map(Into::into));
                 self.output_resized(&o);
             }
+        }
+        // Resolutions, and displays turned off and on: real displays only.
+        if let Some(mut backend) = self.backend.take() {
+            if let crate::backend::Backend::Udev(u) = &mut backend {
+                u.reconfigure(self);
+            }
+            self.backend = Some(backend);
         }
         self.ui.settings_changed(&self.config);
         if !self.config.errors.is_empty() {

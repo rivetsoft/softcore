@@ -217,6 +217,19 @@ pub fn outputs(state: &State) -> Value {
     let mut out = serde_json::Map::new();
     for o in &state.outputs {
         let props = o.physical_properties();
+        use smithay::utils::Transform as T;
+        let transform = match o.current_transform() {
+            T::Normal => "Normal",
+            T::_90 => "90",
+            T::_180 => "180",
+            T::_270 => "270",
+            T::Flipped => "Flipped",
+            T::Flipped90 => "Flipped90",
+            T::Flipped180 => "Flipped180",
+            T::Flipped270 => "Flipped270",
+        };
+        // A window on another desktop is upside down to the renderer, not to anyone else.
+        let transform = if o.name() == "winit" { "Normal" } else { transform };
         let modes = o.modes();
         let geo = State::output_geometry(o);
         out.insert(
@@ -231,7 +244,18 @@ pub fn outputs(state: &State) -> Value {
                 "current_mode": o.current_mode().and_then(|c| modes.iter().position(|m| *m == c)),
                 "vrr_supported": false,
                 "vrr_enabled": false,
-                "logical": {"x": geo.loc.x, "y": geo.loc.y, "width": geo.size.w, "height": geo.size.h, "scale": o.current_scale().fractional_scale(), "transform": "Normal"},
+                "logical": {"x": geo.loc.x, "y": geo.loc.y, "width": geo.size.w, "height": geo.size.h, "scale": o.current_scale().fractional_scale(), "transform": transform},
+            }),
+        );
+    }
+    // Plugged in and turned off: no mode in use, no place.
+    for o in &state.off_outputs {
+        out.insert(
+            o.name.clone(),
+            json!({
+                "name": o.name, "make": o.make, "model": o.model, "serial": "Unknown", "physical_size": [0, 0],
+                "modes": o.modes.iter().map(|(w, h, hz, own)| json!({"width": w, "height": h, "refresh_rate": hz, "is_preferred": own})).collect::<Vec<_>>(),
+                "current_mode": null, "vrr_supported": false, "vrr_enabled": false, "logical": null,
             }),
         );
     }

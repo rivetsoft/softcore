@@ -48,7 +48,11 @@ impl State {
     /// How big a picture of a source is, in pixels.
     pub fn source_size(&self, source: &Source) -> Option<Size<i32, Physical>> {
         match source {
-            Source::Output(name) => self.output_named(name)?.current_mode().map(|m| m.size),
+            Source::Output(name) => {
+                let o = self.output_named(name)?;
+                // Turned on its side, its picture is as it looks, not as the panel is wired.
+                o.current_mode().map(|m| o.current_transform().transform_size(m.size))
+            }
             Source::Window(id) => {
                 let win = self.wins.get(id)?;
                 let scale = win.output.as_deref().and_then(|n| self.output_named(n)).map(|o| o.current_scale().fractional_scale()).unwrap_or(1.0);

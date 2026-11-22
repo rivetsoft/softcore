@@ -289,6 +289,8 @@ pub struct OutputRule {
     pub mode: Option<(i32, i32, Option<i32>)>,
     pub scale: Option<f64>,
     pub position: Option<(i32, i32)>,
+    /// Turned by 0, 90, 180 or 270 degrees, and mirrored. None: as it is.
+    pub transform: Option<(u32, bool)>,
 }
 
 /// A display's line: its name, and what follows it.
@@ -312,6 +314,21 @@ pub fn parse_output(name: &str, value: &str) -> Result<OutputRule, String> {
             Some(("position", s)) => {
                 let (x, y) = s.split_once(',').ok_or_else(bad)?;
                 r.position = Some((x.parse().map_err(|_| bad())?, y.parse().map_err(|_| bad())?));
+            }
+            // normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270.
+            Some(("transform", t)) => {
+                let (flip, turn) = match t.strip_prefix("flipped") {
+                    Some(rest) => (true, rest.trim_start_matches('-')),
+                    None => (false, t),
+                };
+                let turn = match turn {
+                    "" | "normal" => 0,
+                    "90" => 90,
+                    "180" => 180,
+                    "270" => 270,
+                    _ => return Err(bad()),
+                };
+                r.transform = Some((turn, flip));
             }
             _ => return Err(bad()),
         }

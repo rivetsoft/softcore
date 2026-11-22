@@ -46,6 +46,8 @@ pub struct Udev {
     manager: Manager,
     scanner: DrmScanner,
     screens: HashMap<crtc::Handle, Screen>,
+    /// Every display plugged in, in use or not, to set again when the settings change.
+    known: Vec<(connector::Info, crtc::Handle)>,
     active: bool,
 }
 
@@ -80,7 +82,7 @@ pub fn init(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result
     let manager: Manager = DrmOutputManager::new(drm, allocator, exporter, Some(gbm), [Fourcc::Abgr8888, Fourcc::Argb8888], render_formats);
 
     crate::backend::renderer_ready(state, &mut renderer);
-    state.backend = Some(Backend::Udev(Box::new(Udev { session: session.clone(), renderer, manager, scanner: DrmScanner::new(), screens: HashMap::new(), active: true })));
+    state.backend = Some(Backend::Udev(Box::new(Udev { session: session.clone(), renderer, manager, scanner: DrmScanner::new(), screens: HashMap::new(), known: Vec::new(), active: true })));
 
     let handle = event_loop.handle();
     handle
@@ -172,37 +174,93 @@ impl Udev {
         let Ok(found) = self.scanner.scan_connectors(self.manager.device()) else { return };
         for event in found {
             match event {
-                DrmScanEvent::Connected { connector, crtc: Some(crtc) } => self.connected(state, connector, crtc),
-                DrmScanEvent::Disconnected { crtc: Some(crtc), .. } => {
-                    if let Some(s) = self.screens.remove(&crtc) {
-                        state.dh.remove_global::<State>(s.global);
-                        state.remove_output(&s.output);
-                    }
+                DrmScanEvent::Connected { connector, crtc: Some(crtc) } => {
+                    self.known.retain(|(c, _)| c.handle() != connector.handle());
+                    self.known.push((connector.clone(), crtc));
+                    self.connected(state, connector, crtc);
+                }
+                DrmScanEvent::Disconnected { connector, crtc: Some(crtc) } => {
+                    self.known.retain(|(c, _)| c.handle() != connector.handle());
+                    let name = Self::name(&connector);
+                    state.off_outputs.retain(|o| o.name != name);
+                    self.gone(state, crtc);
                 }
                 _ => {}
             }
         }
     }
 
-    fn connected(&mut self, state: &mut State, connector: connector::Info, crtc: crtc::Handle) {
-        let name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
-        let rule = state.config.outputs.iter().find(|r| r.name == name).cloned();
-        if rule.as_ref().is_some_and(|r| r.off) {
-            return;
-        }
+    fn name(connector: &connector::Info) -> String {
+        format!("{}-{}", connector.interface().as_str(), connector.interface_id())
+    }
+
+    /// The mode the settings ask of a display, else the display's own choice.
+    fn pick(state: &State, connector: &connector::Info) -> Option<smithay::reexports::drm::control::Mode> {
+        let name = Self::name(connector);
+        let rule = state.config.outputs.iter().find(|r| r.name == name);
         let modes = connector.modes();
-        if modes.is_empty() {
-            return;
-        }
-        // The mode the settings ask for, else the display's own choice.
-        let wanted = rule.as_ref().and_then(|r| r.mode).and_then(|(w, h, hz)| {
+        let wanted = rule.and_then(|r| r.mode).and_then(|(w, h, hz)| {
             modes.iter().filter(|m| m.size() == (w as u16, h as u16)).min_by_key(|m| match hz {
                 Some(hz) => (Mode::from(**m).refresh - hz).abs(),
                 None => -Mode::from(**m).refresh,
             })
         });
-        let drm_mode = *wanted.or(modes.iter().find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))).unwrap_or(&modes[0]);
+        wanted.or(modes.iter().find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))).or(modes.first()).copied()
+    }
+
+    /// A display stops being used: unplugged, or turned off in the settings.
+    fn gone(&mut self, state: &mut State, crtc: crtc::Handle) {
+        if let Some(s) = self.screens.remove(&crtc) {
+            state.dh.remove_global::<State>(s.global);
+            state.remove_output(&s.output);
+        }
+    }
+
+    /// The settings changed: displays turned off or on, and resolutions. A display whose
+    /// resolution changes is taken down and set up again; its workspaces go next door for
+    /// the moment and come straight home.
+    pub fn reconfigure(&mut self, state: &mut State) {
+        for (connector, crtc) in self.known.clone() {
+            let name = Self::name(&connector);
+            let off = state.config.outputs.iter().any(|r| r.name == name && r.off);
+            let current = self.screens.get(&crtc).and_then(|s| s.output.current_mode());
+            let same = current.is_some() && current == Self::pick(state, &connector).map(Mode::from);
+            let on = current.is_some();
+            if off {
+                if on {
+                    self.gone(state, crtc);
+                }
+                if !state.off_outputs.iter().any(|o| o.name == name) {
+                    // Noted as there and not in use.
+                    self.connected(state, connector, crtc);
+                }
+            } else if !on {
+                self.connected(state, connector, crtc);
+            } else if !same {
+                self.gone(state, crtc);
+                self.connected(state, connector, crtc);
+            }
+        }
+        state.queue_redraw();
+    }
+
+    fn connected(&mut self, state: &mut State, connector: connector::Info, crtc: crtc::Handle) {
+        let name = Self::name(&connector);
+        let modes = connector.modes();
+        let Some(drm_mode) = Self::pick(state, &connector) else { return };
         let mode = Mode::from(drm_mode);
+        state.off_outputs.retain(|o| o.name != name);
+        if state.config.outputs.iter().any(|r| r.name == name && r.off) {
+            // Not used, but still told about, so it can be turned on again.
+            let info = display_info::for_connector(self.manager.device(), connector.handle());
+            state.off_outputs.push(crate::state::OffOutput {
+                name,
+                make: info.as_ref().and_then(|i| i.make()).unwrap_or_else(|| "Unknown".into()),
+                model: info.as_ref().and_then(|i| i.model()).unwrap_or_else(|| "Unknown".into()),
+                modes: modes.iter().map(|m| (m.size().0 as i32, m.size().1 as i32, Mode::from(*m).refresh, *m == drm_mode)).collect(),
+            });
+            return;
+        }
 
         let device = self.manager.device();
         let info = display_info::for_connector(device, connector.handle());

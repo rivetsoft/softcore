@@ -530,7 +530,7 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     let name = output.name();
     let programs = state.blur.programs.clone().filter(|_| state.config.blur);
     let mut behind = state.blur.outputs.remove(&name).unwrap_or_default();
-    let mode = output.current_mode().map(|m| m.size).unwrap_or_default();
+    let mode = output.current_mode().map(|m| output.current_transform().transform_size(m.size)).unwrap_or_default();
     let strength = state.config.blur_strength;
 
     // From the bottom up, since what is above may want a blurred picture of what is below.

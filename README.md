@@ -69,8 +69,9 @@ Rivet Shell runs under Softcore (panels, dock, wallpaper, launcher: they are lay
 surfaces). Its workspaces item, window title, dock and log out work once the shell knows
 Softcore by name: a `Compositor::Softcore` that asks `softcore msg` what it asks `niri msg`,
 since the answers have the same fields. Softcore puts itself on the PATH of what it starts,
-so `softcore msg` is found wherever Softcore was started from. The shell's window look
-settings do nothing here: Softcore has its own settings file.
+so `softcore msg` is found wherever Softcore was started from. The shell's Displays page
+and window look settings work too, through a file of their own that the settings include
+(see *Displays*).
 
 ## Settings
 
@@ -143,6 +144,28 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
+
+## Displays
+
+One line a display, by the name `softcore msg outputs` gives it:
+
+```
+output.DP-5=mode=2560x1440@59.951 scale=1.5 position=0,0 transform=normal
+output.HDMI-A-1=transform=90
+output.eDP-1=off
+```
+
+`mode` is a resolution and, after `@`, a refresh rate (the nearest the display has is used);
+`transform` is `normal`, `90`, `180`, `270`, or `flipped` with or without a turn
+(`flipped-90`). Anything left out stays the display's own choice. A change applies as the
+file is saved: a display whose resolution changes, or that is turned off or on, is taken
+down and set up again, and its workspaces come straight back to it. A display turned off
+is still listed by `softcore msg outputs`, so it can be turned on again.
+
+Rivet Shell's Displays page and its window look settings write these lines, and the look's
+own (`gaps`, `border`, `radius`, …), into `rivet-shell.settings` next to the settings file,
+which includes it with one line at its end: `include=rivet-shell.settings`. What you write
+after that line still wins.
 
 ## Borders
 
