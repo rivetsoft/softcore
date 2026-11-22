@@ -174,6 +174,19 @@ row. Workspaces, which sit one under the other beside sideways strips, sit side 
 here. The keys and action names stay as they are: `focus-column-left` means left on the
 screen, and `consume-or-expel-window-left` means towards the row before.
 
+## Full screen
+
+Mod+Shift+F (`fullscreen-window`) gives the focused window the whole display, over the
+shell's panels, and a program can ask for the same (and for a display by name, which it
+then moves to). It grows from where the window stood and shrinks back there. One window a
+workspace has it at a time, and it ends when the focus goes to another window, by a key or
+a click, or when a new window opens on that workspace: the focus is never on something out
+of sight.
+
+Mod+Ctrl+Shift+F (`toggle-windowed-fullscreen`, niri's name) tells the program it has the
+whole screen while the window stays in its place: a video or a game drops its own bars and
+buttons, in a column beside the others.
+
 ## Tabs
 
 Mod+W (`toggle-column-tabbed-display`, niri's name for it) makes tabs of the focused
@@ -362,7 +375,7 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
 - Opacity per program: it is one setting for every unfocused window (`inactive_opacity`)
   until there are window rules. Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
-- Animations for floating windows and for going fullscreen and back, which jump.
+- Animations for floating windows, which jump, as a floating window going to full screen does.
 - Window rules, named workspaces. Titles on the tabs: the strip shows how many there are and
   which is showing, not what they are. In the overview, dragging a window to
   another workspace, a corner of the screen that opens it, and a touchpad gesture for it.

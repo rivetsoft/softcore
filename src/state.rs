@@ -76,6 +76,8 @@ pub struct Win {
     pub foreign: ForeignToplevelHandle,
     /// The display it was last told it is on.
     pub output: Option<String>,
+    /// Told it has the whole screen while it keeps its place among the others.
+    pub windowed: bool,
     pub deco: crate::render::Deco,
     /// Its piece of a strip of tabs, as last drawn: kept while the colour is the same.
     pub tab: Option<(smithay::backend::renderer::element::Id, [u8; 4])>,
@@ -464,7 +466,7 @@ impl State {
                 }
             });
         }
-        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
+        self.wins.insert(id, Win { window, foreign, output: None, windowed: false, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
         self.layout.add_window(id, floating, None);
         self.layer_focus = None;
         self.queue_redraw();
@@ -517,7 +519,7 @@ impl State {
                             s.states.set(st);
                         }
                     }
-                    if t.fullscreen {
+                    if t.fullscreen || win.windowed {
                         s.states.set(xdg_toplevel::State::Fullscreen);
                     } else {
                         s.states.unset(xdg_toplevel::State::Fullscreen);
@@ -803,7 +805,18 @@ impl State {
             Action::WorkspaceScroll(to) => self.layout.set_workspace_scroll(to),
             Action::FullscreenWindow => {
                 if let Some(id) = active {
+                    if let Some(w) = self.wins.get_mut(&id) {
+                        w.windowed = false;
+                    }
                     self.layout.set_fullscreen(id, None);
+                }
+            }
+            Action::WindowedFullscreen => {
+                if let Some(id) = active {
+                    self.layout.set_fullscreen(id, Some(false));
+                    if let Some(w) = self.wins.get_mut(&id) {
+                        w.windowed = !w.windowed;
+                    }
                 }
             }
             Action::CenterColumn => self.layout.center_column(),

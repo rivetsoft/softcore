@@ -108,6 +108,8 @@ pub enum Action {
     /// as its display does again. None: the other way from now.
     WorkspaceScroll(Option<Option<Scroll>>),
     FullscreenWindow,
+    /// The window is told it has the whole screen, and stays where it is.
+    WindowedFullscreen,
     CenterColumn,
     ToggleFloating,
     MoveToScratchpad,
@@ -172,6 +174,7 @@ impl Action {
                 v => Some(Scroll::parse(v).ok_or(format!("{name} needs horizontal, vertical, auto or default"))?),
             })),
             "fullscreen-window" => Action::FullscreenWindow,
+            "toggle-windowed-fullscreen" => Action::WindowedFullscreen,
             "center-column" => Action::CenterColumn,
             "toggle-window-floating" => Action::ToggleFloating,
             "move-window-to-scratchpad" => Action::MoveToScratchpad,
@@ -231,6 +234,7 @@ impl Action {
             }),
             Action::ToggleTabbed => "The windows of the column as tabs, or all showing".into(),
             Action::FullscreenWindow => "Full screen".into(),
+            Action::WindowedFullscreen => "Full screen as the program sees it, in its place".into(),
             Action::CenterColumn => "Centre the column".into(),
             Action::ToggleFloating => "Float the window, or put it back".into(),
             Action::MoveToScratchpad => "Put the window away in the scratchpad".into(),
@@ -457,6 +461,7 @@ Mod+F maximize-column
 Mod+W toggle-column-tabbed-display
 Mod+Shift+W toggle-workspace-scroll
 Mod+Shift+F fullscreen-window
+Mod+Ctrl+Shift+F toggle-windowed-fullscreen
 Mod+C center-column
 Mod+V toggle-window-floating
 Mod+Shift+V switch-focus-between-floating-and-tiling

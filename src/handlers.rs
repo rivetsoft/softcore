@@ -192,8 +192,16 @@ impl XdgShellHandler for State {
         }
     }
 
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
         if let Some(id) = self.win_for_surface(surface.wl_surface()) {
+            // Told it has the whole screen already, and kept in its place: it stays there.
+            if self.wins.get(&id).is_some_and(|w| w.windowed) {
+                return;
+            }
+            // On the display it asks for, when it names one.
+            if let Some(o) = output.as_ref().and_then(Output::from_resource) {
+                self.layout.move_window_to_monitor(id, &o.name());
+            }
             self.layout.set_fullscreen(id, Some(true));
             self.queue_redraw();
         }
@@ -201,6 +209,9 @@ impl XdgShellHandler for State {
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
         if let Some(id) = self.win_for_surface(surface.wl_surface()) {
+            if let Some(w) = self.wins.get_mut(&id) {
+                w.windowed = false;
+            }
             self.layout.set_fullscreen(id, Some(false));
             self.queue_redraw();
         }

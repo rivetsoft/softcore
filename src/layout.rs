@@ -470,6 +470,8 @@ impl Layout {
         }
         let width = self.opts.default_width;
         let Some(ws) = self.ws() else { return };
+        // It is not to open out of sight behind a window that has the whole screen.
+        ws.fullscreen = None;
         if floating {
             ws.floating.push(id);
             ws.float_focus = Some(id);
@@ -526,7 +528,10 @@ impl Layout {
         let dir = self.on_strip(dir);
         let Some(ws) = self.ws() else { return };
         ws.float_focus = None;
+        // Going to another window leaves full screen: the focus is never out of sight.
+        ws.fullscreen = None;
         if ws.cols.is_empty() {
+            self.settle();
             return;
         }
         match dir {
@@ -562,6 +567,7 @@ impl Layout {
     pub fn focus_column_edge(&mut self, last: bool) {
         let Some(ws) = self.ws() else { return };
         ws.float_focus = None;
+        ws.fullscreen = None;
         ws.active = if last { ws.cols.len().saturating_sub(1) } else { 0 };
         self.settle();
     }
@@ -569,6 +575,7 @@ impl Layout {
     /// Between the floating windows and the columns under them.
     pub fn switch_floating_focus(&mut self) {
         let Some(ws) = self.ws() else { return };
+        ws.fullscreen = None;
         ws.float_focus = match ws.float_focus {
             Some(_) if !ws.cols.is_empty() => None,
             Some(f) => Some(f),
@@ -745,7 +752,34 @@ impl Layout {
         let Some((mi, wi)) = self.find(id) else { return };
         let ws = &mut self.mons[mi].wss[wi];
         let on = on.unwrap_or(ws.fullscreen != Some(id));
-        ws.fullscreen = on.then_some(id);
+        if on {
+            ws.fullscreen = Some(id);
+        } else if ws.fullscreen == Some(id) {
+            ws.fullscreen = None;
+        }
+        self.settle();
+    }
+
+    /// Send a window to another display, a column of its own on the workspace in view there.
+    pub fn move_window_to_monitor(&mut self, id: WinId, name: &str) {
+        let (Some((mi, wi)), Some(to)) = (self.find(id), self.monitor(name)) else { return };
+        if mi == to {
+            return;
+        }
+        let floating = self.mons[mi].wss[wi].floating.contains(&id);
+        let width = self.opts.default_width;
+        self.mons[mi].wss[wi].remove(id);
+        self.heights.remove(&id);
+        let t = &mut self.mons[to];
+        let ws = &mut t.wss[t.active];
+        if floating {
+            ws.floating.push(id);
+            ws.float_focus = Some(id);
+        } else {
+            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false });
+        }
+        self.active_mon = to;
+        self.settle();
     }
 
     // ---- the scratchpad ----
@@ -1002,7 +1036,7 @@ impl Layout {
             for ws in &m.wss {
                 tiles.clear();
                 self.ws_tiles(m, ws, false, &|_| (1, 1), None, &mut tiles);
-                now.extend(tiles.iter().filter(|t| !t.floating && !t.fullscreen).map(|t| (t.id, (ws.id, t.rect))));
+                now.extend(tiles.iter().filter(|t| !t.floating).map(|t| (t.id, (ws.id, t.rect))));
             }
         }
         self.offsets.retain(|id, _| now.contains_key(id));
@@ -1151,7 +1185,15 @@ impl Layout {
             }
         }
         if let Some(id) = ws.fullscreen {
-            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false, zoom: 1.0, tab: None, hidden: false });
+            // On the strip, the whole screen is where the strip is scrolled to: so a window
+            // going to full screen, or back, slides from where it was seen.
+            let by = if sliding { 0 } else { ws.view_to.round() as i32 };
+            let mut rect = if vertical { Rect::new(0, by, m.size.0, m.size.1) } else { Rect::new(by, 0, m.size.0, m.size.1) };
+            let off = self.offsets.get(&id).filter(|_| sliding);
+            if let Some(o) = off {
+                rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
+            }
+            out.push(Tile { id, rect, border: false, active: focused, floating: false, fullscreen: true, moving: off.is_some(), resizing: off.is_some(), zoom: 1.0, tab: None, hidden: false });
         }
     }
 
@@ -1351,6 +1393,36 @@ mod tests {
         assert_eq!(size(&l, 2), (481, 576));
         l.set_workspace_scroll(Some(None));
         assert_eq!(size(&l, 2), (976, 281));
+    }
+
+    #[test]
+    fn full_screen_grows_from_the_window_and_ends_when_the_focus_goes() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.finish_animations();
+        let tile = |l: &Layout, id| l.tiles(0, &fs).into_iter().find(|t| t.id == id).unwrap();
+        let was = tile(&l, 2).rect;
+        l.set_fullscreen(2, Some(true));
+        // It starts where it stood, on its way to the whole screen.
+        let t = tile(&l, 2);
+        assert!(t.fullscreen && t.moving && t.rect == was);
+        l.finish_animations();
+        assert_eq!(tile(&l, 2).rect, Rect::new(0, 0, 1000, 600));
+        assert_eq!(l.sizes(0, &fs).iter().find(|t| t.id == 2).map(|t| (t.rect.w, t.rect.h)), Some((1000, 600)));
+        // The focus going to the window beside it ends it.
+        l.focus(Dir::Left);
+        assert_eq!((l.active_window(), tile(&l, 2).fullscreen), (Some(1), false));
+        // And so does a window opening on the workspace.
+        l.set_fullscreen(1, Some(true));
+        l.add_window(3, false, None);
+        assert_eq!((l.active_window(), tile(&l, 1).fullscreen), (Some(3), false));
+        // Asked for on another display, it goes there.
+        l.add_monitor("B", (800, 600));
+        l.move_window_to_monitor(3, "B");
+        l.set_fullscreen(3, Some(true));
+        l.finish_animations();
+        assert_eq!(l.tiles(1, &fs).iter().map(|t| (t.id, t.rect)).collect::<Vec<_>>(), vec![(3, Rect::new(0, 0, 800, 600))]);
     }
 
     #[test]
@@ -1589,6 +1661,7 @@ mod tests {
         l.finish_animations();
         assert_eq!(l.tiles(0, &fs)[0].rect.w, 1000 - 20 - 4);
         l.set_fullscreen(1, None);
+        l.finish_animations();
         let t = l.tiles(0, &fs);
         assert_eq!((t[0].rect, t[0].border), (Rect::new(0, 0, 1000, 600), false));
     }
