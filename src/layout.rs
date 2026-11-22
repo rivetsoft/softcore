@@ -192,6 +192,8 @@ pub struct Tile {
     pub fullscreen: bool,
     /// On its way to its place: drawn at this size whatever size the window itself has.
     pub moving: bool,
+    /// Changing size on the way.
+    pub resizing: bool,
 }
 
 /// Where a floating window was put and the size it was given, when it was: until then it
@@ -201,6 +203,9 @@ pub struct Float {
     /// Its corner, from the corner of the part of the display panels leave free.
     pub pos: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
+    /// While it is resized by its left or its top edge: the right, the bottom edge is what
+    /// stays put, whatever size the window itself has got to so far.
+    pub hold: (bool, bool),
 }
 
 /// How much of a floating window always stays on its display, to take hold of.
@@ -677,7 +682,7 @@ impl Layout {
     /// Put a floating window somewhere, or give it a size; it stays there, and that size,
     /// through being put in a column and floated again.
     pub fn set_float(&mut self, id: WinId, f: Float) {
-        self.floats.insert(id, Float { pos: f.pos, size: f.size.map(|(w, h)| (w.max(80), h.max(60))) });
+        self.floats.insert(id, Float { size: f.size.map(|(w, h)| (w.max(80), h.max(60))), ..f });
     }
 
     /// The part of the display a window's workspace has, panels left out.
@@ -978,7 +983,7 @@ impl Layout {
                     rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
                 }
                 if ws.fullscreen != Some(*id) {
-                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some() });
+                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0) });
                 }
             }
         }
@@ -986,19 +991,23 @@ impl Layout {
             let (w, h) = float_size(*id);
             let (w, h) = (w.clamp(1, area.w.max(1)), h.clamp(1, area.h.max(1)));
             // Where it was put, else the middle; and never so far off that it can't be reached.
-            let (x, y) = match self.float(*id).pos {
-                Some((x, y)) => (area.x + x, area.y + y),
+            let f = self.float(*id);
+            let (x, y) = match f.pos {
+                Some((x, y)) => {
+                    let (rw, rh) = f.size.unwrap_or((w, h));
+                    (area.x + x + if f.hold.0 { rw - w } else { 0 }, area.y + y + if f.hold.1 { rh - h } else { 0 })
+                }
                 None => (area.x + (area.w - w) / 2, area.y + (area.h - h) / 2),
             };
             let x = x.min(area.x + area.w - HOLD).max(area.x + HOLD - w);
             let y = y.min(area.y + area.h - HOLD).max(area.y);
             let rect = Rect::new(x, y, w, h);
             if ws.fullscreen != Some(*id) {
-                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false });
+                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false });
             }
         }
         if let Some(id) = ws.fullscreen {
-            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false });
+            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false });
         }
     }
 
@@ -1141,7 +1150,7 @@ mod tests {
         l.add_window(1, true, None);
         let rect = |l: &Layout| l.tiles(0, &fs)[0].rect;
         assert_eq!(rect(&l), Rect::new(350, 200, 300, 200));
-        l.set_float(1, Float { pos: Some((20, 30)), size: Some((400, 10)) });
+        l.set_float(1, Float { pos: Some((20, 30)), size: Some((400, 10)), ..Default::default() });
         // Where it was put (its picture is still the size the window itself has), and the
         // size it is asked to be, which is never tiny.
         assert_eq!((rect(&l), l.float_size(1)), (Rect::new(20, 30, 300, 200), Some((400, 60))));
@@ -1150,10 +1159,14 @@ mod tests {
         l.toggle_floating(1);
         assert_eq!(rect(&l), Rect::new(20, 30, 300, 200));
         // Dragged off the display, enough stays on to take hold of.
-        l.set_float(1, Float { pos: Some((5000, -500)), size: None });
+        l.set_float(1, Float { pos: Some((5000, -500)), size: None, ..Default::default() });
         assert_eq!(rect(&l), Rect::new(952, 0, 300, 200));
-        l.set_float(1, Float { pos: Some((-5000, 5000)), size: None });
+        l.set_float(1, Float { pos: Some((-5000, 5000)), size: None, ..Default::default() });
         assert_eq!(rect(&l), Rect::new(-252, 552, 300, 200));
+        // Resized by its left and top edges, its far corner stays where it is while the
+        // window itself is still the old size.
+        l.set_float(1, Float { pos: Some((100, 100)), size: Some((400, 300)), hold: (true, true) });
+        assert_eq!(rect(&l), Rect::new(200, 200, 300, 200));
     }
 
     #[test]

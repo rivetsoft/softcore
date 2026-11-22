@@ -72,6 +72,9 @@ pub struct Win {
     pub shown: f64,
     /// Its last frame, taken as it leaves, to fade out with.
     pub picture: Option<smithay::backend::renderer::gles::GlesTexture>,
+    /// How it looked before it began changing size, shown where its new frame doesn't
+    /// reach yet.
+    pub before: Option<(smithay::backend::renderer::gles::GlesTexture, smithay::backend::renderer::element::Id)>,
     /// When it last had the focus, for `softcore msg windows`.
     pub focused_at: Duration,
 }
@@ -421,7 +424,7 @@ impl State {
                 }
             });
         }
-        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, focused_at: self.start.elapsed() });
+        self.wins.insert(id, Win { window, foreign, output: None, deco: Default::default(), shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
         self.layout.add_window(id, floating, None);
         self.layer_focus = None;
         self.queue_redraw();
@@ -580,6 +583,8 @@ impl State {
         }
         self.foreign_toplevel_state.cleanup_closed_handles();
         self.update_areas();
+        // Before windows are told their new sizes, while they still look as they did.
+        crate::render::keep_before(self);
         self.sync_windows();
         self.update_focus();
         self.update_pointer_focus();

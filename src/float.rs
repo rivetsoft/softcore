@@ -34,9 +34,9 @@ fn place(state: &State, id: WinId) -> Option<(Rect, Rect)> {
     Some((rect, area))
 }
 
-fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool) {
+fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool, hold: (bool, bool)) {
     let size = if sized { Some((rect.w, rect.h)) } else { state.layout.float(id).size };
-    state.layout.set_float(id, Float { pos: Some((rect.x - area.x, rect.y - area.y)), size });
+    state.layout.set_float(id, Float { pos: Some((rect.x - area.x, rect.y - area.y)), size, hold });
     state.queue_redraw();
 }
 
@@ -73,14 +73,14 @@ pub fn moved(state: &mut State) {
         return;
     };
     match resize {
-        None => put(state, id, Rect::new(r.x + dx, r.y + dy, r.w, r.h), area, false),
+        None => put(state, id, Rect::new(r.x + dx, r.y + dy, r.w, r.h), area, false, (false, false)),
         Some((left, top)) => {
             let w = (if left { r.w - dx } else { r.w + dx }).max(80);
             let h = (if top { r.h - dy } else { r.h + dy }).max(60);
             // The corner across from the one held stays where it is.
             let x = if left { r.x + r.w - w } else { r.x };
             let y = if top { r.y + r.h - h } else { r.y };
-            put(state, id, Rect::new(x, y, w, h), area, true);
+            put(state, id, Rect::new(x, y, w, h), area, true, (left, top));
         }
     }
 }
@@ -88,8 +88,13 @@ pub fn moved(state: &mut State) {
 /// Let go. The pointer is taken off whatever it is over, so that is told it has come back
 /// and sets its own cursor again.
 pub fn end(state: &mut State) {
-    if state.drag.take().is_none() {
-        return;
+    let Some(d) = state.drag.take() else { return };
+    // Where the window has ended up is where it is from now on, whatever size it settled at.
+    if d.resize.is_some()
+        && let Some((r, area)) = place(state, d.id)
+    {
+        let size = state.layout.float(d.id).size;
+        state.layout.set_float(d.id, Float { pos: Some((r.x - area.x, r.y - area.y)), size, hold: (false, false) });
     }
     state.cursor_status = CursorImageStatus::default_named();
     if let Some(pointer) = state.seat.get_pointer() {
@@ -117,13 +122,13 @@ pub fn action(state: &mut State, action: &Action) -> bool {
                 Dir::Up => (0, -STEP),
                 Dir::Down => (0, STEP),
             };
-            put(state, id, Rect::new(r.x + dx, r.y + dy, r.w, r.h), area, false);
+            put(state, id, Rect::new(r.x + dx, r.y + dy, r.w, r.h), area, false, (false, false));
         }
-        Action::SetColumnWidth(c) => put(state, id, Rect::new(r.x, r.y, part(area.w, c, r.w), r.h), area, true),
-        Action::SetWindowHeight(c) => put(state, id, Rect::new(r.x, r.y, r.w, part(area.h, c, r.h)), area, true),
+        Action::SetColumnWidth(c) => put(state, id, Rect::new(r.x, r.y, part(area.w, c, r.w), r.h), area, true, (false, false)),
+        Action::SetWindowHeight(c) => put(state, id, Rect::new(r.x, r.y, r.w, part(area.h, c, r.h)), area, true, (false, false)),
         // Back to the size it chooses itself, and back to the middle.
-        Action::ResetWindowHeight => state.layout.set_float(id, Float { pos: state.layout.float(id).pos, size: None }),
-        Action::CenterColumn => state.layout.set_float(id, Float { pos: None, size: state.layout.float(id).size }),
+        Action::ResetWindowHeight => state.layout.set_float(id, Float { pos: state.layout.float(id).pos, size: None, hold: (false, false) }),
+        Action::CenterColumn => state.layout.set_float(id, Float { pos: None, size: state.layout.float(id).size, hold: (false, false) }),
         // These are about columns; a floating window has none.
         Action::SwitchPresetWidth | Action::MaximizeColumn | Action::ConsumeOrExpel(_) => {}
         _ => return false,

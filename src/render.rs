@@ -6,9 +6,9 @@ use std::time::Duration;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::utils::RescaleRenderElement;
+use smithay::backend::renderer::element::utils::{CropRenderElement, RescaleRenderElement};
 use smithay::backend::renderer::element::{Id, Kind};
-use smithay::backend::renderer::{Bind, Offscreen, Renderer};
+use smithay::backend::renderer::{Bind, Offscreen, Renderer, Texture};
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
@@ -33,6 +33,7 @@ smithay::backend::renderer::element::render_elements! {
     Memory=MemoryRenderBufferRenderElement<GlesRenderer>,
     Shader=PixelShaderElement,
     Scaled=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Cropped=CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Texture=TextureRenderElement<GlesTexture>,
 }
 
@@ -326,27 +327,36 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
             alpha: shown as f32,
         };
         let alpha = if t.active || t.fullscreen { 1.0 } else { state.config.inactive_opacity } * shown as f32;
-        // On its way somewhere, a window is drawn at the size it has got to, whatever size
-        // its own picture is by now: the client resizes when it likes, the slide stays smooth.
-        let stretch = if (t.moving || shown < 1.0) && geo.size.w > 0 && geo.size.h > 0 && (rect.w, rect.h) != (geo.size.w, geo.size.h) {
-            let grow = if t.moving { 1.0 } else { rect.w as f64 / t.rect.w as f64 };
-            Some(if t.moving { Scale::from((rect.w as f64 / geo.size.w as f64, rect.h as f64 / geo.size.h as f64)) } else { Scale::from(grow) })
-        } else {
-            None
-        };
+        // Appearing, it is drawn a little small. On its way somewhere it is drawn as it is,
+        // never stretched, and cut off at where it has got to: growing shows more of it,
+        // shrinking wipes across how it looked before.
+        let grow = (shown < 1.0 && t.rect.w > 0).then(|| Scale::from(rect.w as f64 / t.rect.w as f64));
         let at = Point::<i32, Logical>::from((rect.x, rect.y));
-        if stretch.is_none() {
+        if grow.is_none() {
             popup_elements(renderer, &surface, at, scale, out);
         }
         out.extend(edges.border(state, &mut win.deco, rect));
-        match stretch {
-            None => surface_elements(renderer, &surface, at - geo.loc, scale, alpha, out),
+        let loc: Point<i32, Physical> = (at - geo.loc).to_physical_precise_round(scale);
+        match grow {
             Some(by) => {
                 let origin: Point<i32, Physical> = at.to_physical_precise_round(scale);
-                let loc: Point<i32, Physical> = (at - geo.loc).to_physical_precise_round(scale);
                 let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(renderer, &surface, loc, scale, alpha, Kind::Unspecified);
                 out.extend(parts.into_iter().map(|e| Elem::Scaled(RescaleRenderElement::from_element(e, origin, by))));
             }
+            None if t.moving => {
+                let clip = Rectangle::<i32, Logical>::new(at, (rect.w, rect.h).into()).to_physical_precise_round(scale);
+                let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(renderer, &surface, loc, scale, alpha, Kind::Unspecified);
+                out.extend(parts.into_iter().filter_map(|e| CropRenderElement::from_element(e, scale, clip)).map(Elem::Cropped));
+                if let Some((texture, id)) = &win.before {
+                    let has = texture.size();
+                    let (w, h) = (rect.w.min((has.w as f64 / scale.x).floor() as i32), rect.h.min((has.h as f64 / scale.y).floor() as i32));
+                    if w > 0 && h > 0 {
+                        let src = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), (w as f64 * scale.x, h as f64 * scale.y).into());
+                        out.push(Elem::Texture(TextureRenderElement::from_static_texture(id.clone(), renderer.context_id(), at.to_f64().to_physical(scale), texture.clone(), 1, Transform::Normal, Some(alpha), Some(src), Some((w, h).into()), None, Kind::Unspecified)));
+                    }
+                }
+            }
+            None => surface_elements(renderer, &surface, at - geo.loc, scale, alpha, out),
         }
         // What shows through it, blurred: the wallpaper, since tiled windows have nothing else
         // behind them (a floating one shows the wallpaper too, not the windows under it).
@@ -388,6 +398,27 @@ pub fn start_closing(state: &mut State, id: WinId) {
         alpha: 1.0,
     };
     state.closing.push(Closing { output: output.name(), rect: t.rect, texture, id: Id::new(), deco: Deco::default(), edges, t: 0.0 });
+}
+
+/// Windows about to change size on their way somewhere: keep how each looks now, to show
+/// where its new frame doesn't reach yet. Those that have arrived let theirs go.
+pub fn keep_before(state: &mut State) {
+    let resizing: Vec<(WinId, f64)> = state.outputs.clone().iter().flat_map(|o| state.tiles(o).into_iter().filter(|t| t.resizing).map(|t| (t.id, o.current_scale().fractional_scale())).collect::<Vec<_>>()).collect();
+    for w in state.wins.iter_mut().filter(|(id, _)| !resizing.iter().any(|(r, _)| r == *id)) {
+        w.1.before = None;
+    }
+    let new: Vec<(WinId, f64)> = resizing.into_iter().filter(|(id, _)| state.wins.get(id).is_some_and(|w| w.before.is_none())).collect();
+    if new.is_empty() {
+        return;
+    }
+    let Some(mut backend) = state.backend.take() else { return };
+    for (id, scale) in new {
+        let texture = snapshot(state, backend.renderer(), id, scale);
+        if let Some(w) = state.wins.get_mut(&id) {
+            w.before = texture.map(|t| (t, Id::new()));
+        }
+    }
+    state.backend = Some(backend);
 }
 
 /// Take a window's picture while it has one to take: just before its client takes the frame

@@ -156,9 +156,10 @@ slide to make room. The strip and the workspaces slide as before. `animation_spe
 all of it faster or slower (2 is twice as fast), and `animations=false` puts everything
 where it belongs at once.
 
-While a window is on its way, its picture is stretched to the size it has got to, so the
-slide is smooth whenever the program itself gets round to drawing at the new size. A
-program that is killed outright vanishes without fading: its last frame goes with it.
+A window changing size on its way is never stretched: it is drawn as it is and cut off at
+where it has got to. Growing shows more of it; shrinking wipes across how it looked before
+it began. A program that is killed outright vanishes without fading: its last frame goes
+with it.
 
 Shadows have a size (larger is softer), an offset below the window, a strength and a
 colour: `shadow_size`, `shadow_offset`, `shadow_opacity`, `shadow_color`.
