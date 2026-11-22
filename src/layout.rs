@@ -52,11 +52,14 @@ pub struct Workspace {
     /// The floating window that has the focus, when one does.
     pub float_focus: Option<WinId>,
     pub fullscreen: Option<WinId>,
+    /// The display it belongs on: where it goes back to when that display returns after
+    /// being away. An empty workspace belongs wherever it is.
+    pub home: String,
 }
 
 impl Workspace {
     fn new(id: u64) -> Workspace {
-        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None }
+        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -225,7 +228,25 @@ impl Layout {
             m.area = area;
         } else if !self.mons.iter().any(|m| m.name == name) {
             let ws = self.new_ws();
-            self.mons.push(Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false });
+            let mut new = Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false };
+            // Back after being away: the workspaces that went to other displays come home.
+            for m in &mut self.mons {
+                let mut i = 0;
+                while i < m.wss.len() {
+                    if m.wss[i].home == name && !m.wss[i].is_empty() {
+                        let at = new.wss.len() - 1;
+                        new.wss.insert(at, m.wss.remove(i));
+                        // The one in view stays in view, or the one that took its place.
+                        if i < m.active {
+                            m.active -= 1;
+                            m.pos = (m.pos - 1.0).max(0.0);
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            self.mons.push(new);
         }
         self.settle();
     }
@@ -678,6 +699,11 @@ impl Layout {
             }
             let m = &mut self.mons[mi];
             m.active = m.active.min(m.wss.len() - 1);
+            if !m.orphan {
+                for ws in m.wss.iter_mut().filter(|w| w.is_empty() || w.home.is_empty()) {
+                    ws.home.clone_from(&m.name);
+                }
+            }
             let area = m.area;
             for ws in &mut m.wss {
                 ws.settle_view(&area, &o);
@@ -1040,10 +1066,27 @@ mod tests {
         l.remove_monitor("B");
         assert_eq!(l.find(1), Some((0, 0)));
         assert_eq!(l.mons.len(), 1);
-        // The last display going keeps everything for the next one.
+        // Back again, it gets its own back, and only its own.
+        l.focus_workspace_by(1);
+        l.add_window(2, false, None);
+        l.add_monitor("B", (800, 600));
+        assert_eq!((l.find(1), l.find(2)), (Some((1, 0)), Some((0, 0))));
+        assert!(l.mons.iter().all(|m| m.wss.last().is_some_and(|w| w.is_empty())));
+        // A window moved to another display by hand stays there.
+        l.focus_window(1);
+        l.move_column_to_monitor(-1);
+        l.remove_monitor("B");
+        l.add_monitor("B", (800, 600));
+        assert_eq!(l.find(1).map(|p| p.0), Some(0));
+
+        // The last display going keeps everything for the next one, and still gives
+        // back what belongs to one that returns.
+        l.add_window(3, false, Some("B"));
+        l.remove_monitor("B");
         l.remove_monitor("A");
         l.add_monitor("C", (800, 600));
-        assert_eq!(l.find(1), Some((0, 0)));
-        assert_eq!(l.mons[0].name, "C");
+        assert_eq!((l.find(1).map(|p| p.0), l.find(3).map(|p| p.0), l.mons[0].name.as_str()), (Some(0), Some(0), "C"));
+        l.add_monitor("B", (800, 600));
+        assert_eq!((l.find(1).map(|p| p.0), l.find(3).map(|p| p.0)), (Some(0), Some(1)));
     }
 }

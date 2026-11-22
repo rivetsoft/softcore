@@ -9,6 +9,9 @@ always last. It works the way [niri](https://github.com/YaLTeR/niri) does, and i
 scratch: niri's behaviour was studied from the outside (what it advertises to clients, what
 `niri msg` says), none of its code is here.
 
+When a display is unplugged its workspaces move to another display, and go back to it
+when it returns. With no display left they wait for the next one.
+
 Softcore is early. It runs in a window of another desktop and with no screen at all, and both
 are checked. Running on displays of its own is written and compiles, but has not been run on
 hardware yet (see *What isn't built yet*).
