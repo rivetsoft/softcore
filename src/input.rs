@@ -47,7 +47,9 @@ impl State {
             return Some(quit.then_some(Action::Quit { confirm: false }));
         }
         let locked = self.lock.locked;
-        let found = self.config.binds.iter().find(|b| (!locked || b.locked) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
+        // A window given every key gets Softcore's bindings too, all but the way back.
+        let all = !locked && self.all_keys.is_some() && self.all_keys == self.layout.active_window() && self.layer_focus.is_none();
+        let found = self.config.binds.iter().find(|b| (!locked || b.locked) && (!all || b.action == Action::ToggleShortcutsInhibit) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
         found.map(Some)
     }
 

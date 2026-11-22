@@ -131,6 +131,10 @@ pub struct State {
     pub blur: crate::blur::Blur,
     /// A floating window being moved or resized with the pointer.
     pub drag: Option<crate::float::Drag>,
+    /// The window that gets every key while it has the focus, Softcore's own bindings
+    /// included (all but the one that takes them back): a compositor being tried out in a
+    /// window, a remote desktop, a virtual machine.
+    pub all_keys: Option<WinId>,
     pub casts: crate::cast::Casts,
     /// The question of what to share, while it is being asked.
     pub picker: Option<crate::picker::Picker>,
@@ -253,6 +257,7 @@ impl State {
             watch: None,
             blur: Default::default(),
             drag: None,
+            all_keys: None,
             casts: Default::default(),
             picker: None,
             output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState::new::<State>(&dh2),
@@ -432,6 +437,9 @@ impl State {
 
     pub fn unmap_window(&mut self, id: WinId) -> Option<Window> {
         crate::render::start_closing(self, id);
+        if self.all_keys == Some(id) {
+            self.all_keys = None;
+        }
         let win = self.wins.remove(&id)?;
         self.layout.remove_window(id);
         self.foreign_toplevel_state.remove_toplevel(&win.foreign);
@@ -769,6 +777,7 @@ impl State {
                     w.shown = 0.0;
                 }
             }
+            Action::ToggleShortcutsInhibit => self.all_keys = if self.all_keys.is_some() && self.all_keys == active { None } else { active },
             Action::SwitchFloatingFocus => self.layout.switch_floating_focus(),
             Action::FocusWorkspace(i) => self.layout.focus_workspace(i),
             Action::FocusWorkspaceBy(b) => self.layout.focus_workspace_by(b),

@@ -88,6 +88,7 @@ pub enum Action {
     FocusMonitor(i32),
     MoveColumnToMonitor(i32),
     ShowHotkeyOverlay,
+    ToggleShortcutsInhibit,
     PowerOffMonitors,
     PowerOnMonitors,
     ReloadConfig,
@@ -150,6 +151,7 @@ impl Action {
             "move-column-to-monitor-left" | "move-column-to-monitor-previous" => Action::MoveColumnToMonitor(-1),
             "move-column-to-monitor-right" | "move-column-to-monitor-next" => Action::MoveColumnToMonitor(1),
             "show-hotkey-overlay" => Action::ShowHotkeyOverlay,
+            "toggle-keyboard-shortcuts-inhibit" => Action::ToggleShortcutsInhibit,
             "power-off-monitors" => Action::PowerOffMonitors,
             "power-on-monitors" => Action::PowerOnMonitors,
             "reload-config" | "load-config-file" => Action::ReloadConfig,
@@ -190,6 +192,7 @@ impl Action {
             Action::FocusMonitor(b) => format!("{} display", if *b > 0 { "Next" } else { "Previous" }),
             Action::MoveColumnToMonitor(b) => format!("Move to the {} display", if *b > 0 { "next" } else { "previous" }),
             Action::ShowHotkeyOverlay => "Show these keys".into(),
+            Action::ToggleShortcutsInhibit => "Give this window every key, or take them back".into(),
             Action::PowerOffMonitors => "Displays off".into(),
             Action::PowerOnMonitors => "Displays on".into(),
             Action::ReloadConfig => "Read the settings again".into(),
@@ -399,6 +402,7 @@ Mod+Shift+Right focus-monitor-right
 Mod+Shift+Ctrl+Left move-column-to-monitor-left
 Mod+Shift+Ctrl+Right move-column-to-monitor-right
 Mod+Shift+Slash show-hotkey-overlay
+Mod+Shift+Escape toggle-keyboard-shortcuts-inhibit
 Mod+Shift+E quit
 Mod+Escape allow-when-locked spawn rivet-shell msg lock
 XF86AudioRaiseVolume allow-when-locked spawn rivet-shell msg volume up

@@ -322,7 +322,8 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         let edges = Edges {
             border: t.border && !t.fullscreen,
             shadow: !t.fullscreen,
-            color: if t.active { look.active } else { look.inactive },
+            // A window holding every key says so with a border of the opposite colour.
+            color: if state.all_keys == Some(t.id) { look.active.map(|c| 255 - c) } else if t.active { look.active } else { look.inactive },
             radius: if state.config.layout.border > 0 { look.radius } else { 0 },
             alpha: shown as f32,
         };

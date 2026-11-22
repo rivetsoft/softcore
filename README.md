@@ -29,6 +29,11 @@ softcore --spawn foot   # run something once started
 ```
 
 In a window, Mod is Alt (the desktop outside keeps Super); on displays of its own it is Super.
+To try a new build inside a running Softcore, start it from a terminal there (it opens in a
+window) and press Mod+Shift+Escape on that window: it then gets every key, the outer
+Softcore's bindings included, and its border turns the opposite colour to say so. The same
+keys take them back. `mod=super` in the inner one's settings (`SOFTCORE_CONFIG=FILE`) makes it
+answer to the keys it will have on displays of its own.
 Mod+Shift+/ shows every key. The ones to know first: Mod+Return a terminal, Mod+Space the
 launcher, Mod+Q close, Mod+arrows move the focus, Mod+Ctrl+arrows move the window, Mod+R the
 next column width, Mod+Shift+Minus and Mod+Shift+Equal a shorter or taller window (it sits in
