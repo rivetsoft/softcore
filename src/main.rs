@@ -169,6 +169,26 @@ fn main() {
         state.spawn(c);
     }
 
+    // Asked to stop (a kill, Ctrl+C in the terminal it was started from): leave as tidily as
+    // through the leave key, so the sockets it made don't stay behind.
+    static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    extern "C" fn stop(_: libc::c_int) {
+        STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    unsafe {
+        libc::signal(libc::SIGTERM, stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGINT, stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+    event_loop
+        .handle()
+        .insert_source(Timer::from_duration(Duration::from_millis(100)), |_, _, state| {
+            if STOP.load(std::sync::atomic::Ordering::Relaxed) {
+                state.signal.stop();
+            }
+            TimeoutAction::ToDuration(Duration::from_millis(100))
+        })
+        .expect("a timer");
+
     if let Err(e) = event_loop.run(None, &mut state, |state| state.refresh()) {
         fail(&format!("Softcore stopped: {e}"));
     }

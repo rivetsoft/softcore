@@ -168,10 +168,11 @@ blur is made once and kept until the wallpaper changes. A floating window shows 
 wallpaper too, not the windows under it.
 
 Shell surfaces get blur behind them when they ask for it (ext-background-effect, with the
-part of themselves they want it behind), or when `blur_layers` names them: by default
-Rivet Shell's panel and dock. Behind those everything is blurred, windows included, and
-made again only when something under them changed. A surface named in `blur_layers` is
-blurred behind all of its rectangle, so name only ones that fill theirs.
+part of themselves they want it behind), or when `blur_layers` names them. Behind those
+everything is blurred, windows included, and made again only when something under them
+changed. A surface named in `blur_layers` is blurred behind all of its rectangle, so name
+only ones that fill theirs: none are named by default, since Rivet Shell's panel and dock
+are see-through around their bars and a blurred band would cover the windows under them.
 
 ## Talking to it
 
