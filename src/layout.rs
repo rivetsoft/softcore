@@ -27,7 +27,13 @@ impl Rect {
     }
 }
 
-pub use softcore_settings::{Dir, Options};
+pub use softcore_settings::{Dir, Options, Scroll};
+
+/// The same rectangle with across and down changed over: a strip that runs down the screen
+/// is laid out as one that runs across it, and turned.
+fn turned(r: Rect) -> Rect {
+    Rect::new(r.y, r.x, r.h, r.w)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Column {
@@ -177,6 +183,25 @@ pub struct Monitor {
     pub area: Rect,
     /// Its display is gone; the next one to appear takes its workspaces.
     pub orphan: bool,
+    /// Which way its windows scroll, when its own line in the settings says. None: as the
+    /// `scroll` setting says.
+    pub scroll: Option<Scroll>,
+}
+
+impl Monitor {
+    /// Its strips run down the screen: rows one under the other, scrolling up and down.
+    pub fn vertical(&self, o: &Options) -> bool {
+        match self.scroll.unwrap_or(o.scroll) {
+            Scroll::Horizontal => false,
+            Scroll::Vertical => true,
+            Scroll::Auto => self.size.1 > self.size.0,
+        }
+    }
+
+    /// The room for windows as the strip sees it: along the strip is always across.
+    fn strip_area(&self, o: &Options) -> Rect {
+        if self.vertical(o) { turned(self.area) } else { self.area }
+    }
 }
 
 /// Where a window is drawn.
@@ -253,7 +278,7 @@ impl Layout {
             m.area = area;
         } else if !self.mons.iter().any(|m| m.name == name) {
             let ws = self.new_ws();
-            let mut new = Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false };
+            let mut new = Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false, scroll: None };
             // Back after being away: the workspaces that went to other displays come home.
             for m in &mut self.mons {
                 let mut i = 0;
@@ -307,6 +332,44 @@ impl Layout {
         m.area = area;
         self.settle();
         true
+    }
+
+    /// What a display's own line in the settings says about which way it scrolls.
+    pub fn set_scroll(&mut self, name: &str, scroll: Option<Scroll>) {
+        let Some(m) = self.mons.iter_mut().find(|m| m.name == name) else { return };
+        if m.scroll != scroll {
+            m.scroll = scroll;
+            self.settle();
+        }
+    }
+
+    /// Whether the focused display's windows scroll up and down.
+    pub fn vertical(&self) -> bool {
+        self.active_monitor().is_some_and(|m| m.vertical(&self.opts))
+    }
+
+    /// A direction on the screen as a direction on the strip, which is laid out as if it
+    /// ran across: on a display that scrolls up and down, down is the next row.
+    fn on_strip(&self, dir: Dir) -> Dir {
+        if !self.vertical() {
+            return dir;
+        }
+        match dir {
+            Dir::Left => Dir::Up,
+            Dir::Right => Dir::Down,
+            Dir::Up => Dir::Left,
+            Dir::Down => Dir::Right,
+        }
+    }
+
+    /// The way to the next column (or row), or the one before, on the screen.
+    pub fn along(&self, forward: bool) -> Dir {
+        match (self.vertical(), forward) {
+            (false, true) => Dir::Right,
+            (false, false) => Dir::Left,
+            (true, true) => Dir::Down,
+            (true, false) => Dir::Up,
+        }
     }
 
     pub fn monitor(&self, name: &str) -> Option<usize> {
@@ -425,6 +488,7 @@ impl Layout {
     // ---- moving the focus ----
 
     pub fn focus(&mut self, dir: Dir) {
+        let dir = self.on_strip(dir);
         let Some(ws) = self.ws() else { return };
         ws.float_focus = None;
         if ws.cols.is_empty() {
@@ -465,6 +529,7 @@ impl Layout {
     // ---- moving windows ----
 
     pub fn move_column(&mut self, dir: Dir) {
+        let dir = self.on_strip(dir);
         let Some(ws) = self.ws() else { return };
         if ws.cols.is_empty() || ws.float_focus.is_some() {
             return;
@@ -607,7 +672,7 @@ impl Layout {
     pub fn center_column(&mut self) {
         let o = self.opts.clone();
         let Some(m) = self.mons.get_mut(self.active_mon) else { return };
-        let area = m.area;
+        let area = m.strip_area(&o);
         let Some(ws) = m.wss.get_mut(m.active) else { return };
         if ws.cols.is_empty() {
             return;
@@ -858,7 +923,7 @@ impl Layout {
                     ws.home.clone_from(&m.name);
                 }
             }
-            let area = m.area;
+            let area = m.strip_area(&o);
             for ws in &mut m.wss {
                 ws.settle_view(&area, &o);
             }
@@ -932,8 +997,9 @@ impl Layout {
             }
         };
         for m in &mut self.mons {
-            // Workspaces slide by whole screens, so ease in screen heights.
-            let h = m.size.1.max(1) as f64;
+            // Workspaces slide by whole screens, so ease in screen heights (widths, where
+            // the windows scroll up and down and the workspaces go sideways).
+            let h = if m.vertical(&self.opts) { m.size.0 } else { m.size.1 }.max(1) as f64;
             let mut p = m.pos * h;
             ease(&mut p, m.active as f64 * h);
             m.pos = p / h;
@@ -962,7 +1028,8 @@ impl Layout {
     /// they have got to). None: where every window stands on the strip itself, at rest.
     fn ws_tiles(&self, m: &Monitor, ws: &Workspace, focused: bool, float_size: &dyn Fn(WinId) -> (i32, i32), view: Option<f64>, out: &mut Vec<Tile>) {
         let o = &self.opts;
-        let area = &m.area;
+        let vertical = m.vertical(o);
+        let area = &m.strip_area(o);
         let sliding = view.is_some();
         let view = view.unwrap_or(0.0);
         let b = o.border;
@@ -978,6 +1045,9 @@ impl Layout {
                 next += h + o.gaps;
                 let active = focused && ws.float_focus.is_none() && ci == ws.active && ri == col.active;
                 let mut rect = Rect::new(x + b, y + b, (w - 2 * b).max(1), (h - 2 * b).max(1));
+                if vertical {
+                    rect = turned(rect);
+                }
                 let off = self.offsets.get(id).filter(|_| sliding);
                 if let Some(o) = off {
                     rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
@@ -987,6 +1057,7 @@ impl Layout {
                 }
             }
         }
+        let area = &m.area;
         for id in &ws.floating {
             let (w, h) = float_size(*id);
             let (w, h) = (w.clamp(1, area.w.max(1)), h.clamp(1, area.h.max(1)));
@@ -1022,10 +1093,14 @@ impl Layout {
             if off.abs() >= 1.0 {
                 continue;
             }
-            let dy = (off * m.size.1 as f64).round() as i32;
+            // Workspaces go the other way from the windows: one under the other where the
+            // windows scroll sideways, side by side where they scroll up and down.
+            let vertical = m.vertical(&self.opts);
+            let (dx, dy) = if vertical { ((off * m.size.0 as f64).round() as i32, 0) } else { (0, (off * m.size.1 as f64).round() as i32) };
             let start = out.len();
             self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, Some(ws.view), &mut out);
             for t in &mut out[start..] {
+                t.rect.x += dx;
                 t.rect.y += dy;
             }
         }
@@ -1043,7 +1118,8 @@ impl Layout {
             // Not that it matters to a size, but as it was: where the strip is heading.
             for t in &mut out[start..] {
                 if !t.floating && !t.fullscreen {
-                    t.rect.x -= ws.view_to.round() as i32;
+                    let by = ws.view_to.round() as i32;
+                    if m.vertical(&self.opts) { t.rect.y -= by } else { t.rect.x -= by }
                 }
             }
         }
@@ -1054,9 +1130,11 @@ impl Layout {
     pub fn new_window_size(&self, on: Option<&str>) -> Option<(i32, i32)> {
         let m = on.and_then(|n| self.monitor(n)).and_then(|i| self.mons.get(i)).or(self.mons.get(self.active_mon))?;
         let o = &self.opts;
-        let full = m.area.w - 2 * o.gaps_out;
+        let area = m.strip_area(o);
+        let full = area.w - 2 * o.gaps_out;
         let w = (((full + o.gaps) as f64) * o.default_width).round() as i32 - o.gaps;
-        Some(((w - 2 * o.border).max(1), (m.area.h - 2 * o.gaps_out - 2 * o.border).max(1)))
+        let (w, h) = ((w - 2 * o.border).max(1), (area.h - 2 * o.gaps_out - 2 * o.border).max(1));
+        Some(if m.vertical(o) { (h, w) } else { (w, h) })
     }
 }
 
@@ -1072,6 +1150,56 @@ mod tests {
 
     fn fs(_: WinId) -> (i32, i32) {
         (300, 200)
+    }
+
+    #[test]
+    fn windows_scroll_up_and_down() {
+        let mut l = layout();
+        l.set_options(Options { scroll: Scroll::Vertical, ..l.opts.clone() });
+        for id in 1..=3 {
+            l.add_window(id, false, None);
+        }
+        l.finish_animations();
+        let rect = |l: &Layout, id| l.tiles(0, &fs).iter().find(|t| t.id == id).map(|t| t.rect);
+        // Rows as wide as the screen, half its height each: 600 high, so 285 and a gap.
+        // The third is in view, so the first has scrolled off the top.
+        assert_eq!(rect(&l, 1), None);
+        assert_eq!(rect(&l, 2), Some(Rect::new(12, 12, 976, 281)));
+        assert_eq!(rect(&l, 3), Some(Rect::new(12, 307, 976, 281)));
+        // Up is the row before, and the strip scrolls back down to show it.
+        l.focus(Dir::Up);
+        l.focus(Dir::Up);
+        l.finish_animations();
+        assert_eq!(l.active_window(), Some(1));
+        assert_eq!(rect(&l, 1), Some(Rect::new(12, 12, 976, 281)));
+        assert_eq!(rect(&l, 3), None);
+        // Two windows in a row sit side by side, and left and right go between them.
+        l.focus(Dir::Down);
+        l.consume_or_expel(Dir::Left);
+        l.finish_animations();
+        assert_eq!(rect(&l, 1), Some(Rect::new(12, 12, 481, 281)));
+        assert_eq!(rect(&l, 2), Some(Rect::new(507, 12, 481, 281)));
+        l.focus(Dir::Left);
+        assert_eq!(l.active_window(), Some(1));
+        // A new window is asked to be the size of a row.
+        assert_eq!(l.new_window_size(None), Some((976, 281)));
+        // Sideways again, the same windows are columns.
+        l.set_options(Options { scroll: Scroll::Horizontal, ..l.opts.clone() });
+        l.finish_animations();
+        assert_eq!(rect(&l, 1), Some(Rect::new(12, 12, 481, 281)));
+        assert_eq!(rect(&l, 2), Some(Rect::new(12, 307, 481, 281)));
+    }
+
+    #[test]
+    fn a_tall_display_scrolls_up_and_down_when_left_to_choose() {
+        let mut l = Layout::new(Options { scroll: Scroll::Auto, ..Options::default() });
+        l.add_monitor("wide", (1000, 600));
+        l.add_monitor("tall", (600, 1000));
+        assert!(!l.mons[0].vertical(&l.opts));
+        assert!(l.mons[1].vertical(&l.opts));
+        // A display's own line says otherwise.
+        l.set_scroll("tall", Some(Scroll::Horizontal));
+        assert!(!l.mons[1].vertical(&l.opts));
     }
 
     #[test]

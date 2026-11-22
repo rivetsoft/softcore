@@ -45,11 +45,36 @@ pub struct Options {
     pub center_short_columns: bool,
     /// How much of the screen a window shown from the scratchpad takes, each way.
     pub scratchpad_size: f64,
+    /// Which way the strip of windows runs.
+    pub scroll: Scroll,
+}
+
+/// Which way a strip of windows runs, and so which way it scrolls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scroll {
+    /// Columns side by side, scrolling left and right.
+    #[default]
+    Horizontal,
+    /// Rows one under the other, scrolling up and down.
+    Vertical,
+    /// Up and down on a display taller than it is wide, sideways on the others.
+    Auto,
+}
+
+impl Scroll {
+    pub fn parse(v: &str) -> Option<Scroll> {
+        match v {
+            "horizontal" => Some(Scroll::Horizontal),
+            "vertical" => Some(Scroll::Vertical),
+            "auto" => Some(Scroll::Auto),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7 }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7, scroll: Scroll::Horizontal }
     }
 }
 
@@ -291,6 +316,8 @@ pub struct OutputRule {
     pub position: Option<(i32, i32)>,
     /// Turned by 0, 90, 180 or 270 degrees, and mirrored. None: as it is.
     pub transform: Option<(u32, bool)>,
+    /// Which way this display's windows scroll. None: as the `scroll` setting says.
+    pub scroll: Option<Scroll>,
 }
 
 /// A display's line: its name, and what follows it.
@@ -330,6 +357,7 @@ pub fn parse_output(name: &str, value: &str) -> Result<OutputRule, String> {
                 };
                 r.transform = Some((turn, flip));
             }
+            Some(("scroll", v)) => r.scroll = Some(Scroll::parse(v).ok_or_else(bad)?),
             _ => return Err(bad()),
         }
     }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::{Bind, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_combo, parse_output};
+use crate::{Bind, Scroll, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_combo, parse_output};
 
 /// The page of a settings window a key belongs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +92,7 @@ pub const SETTINGS: &[Setting] = &[
     s("blur", Group::Windows, "Blur behind see-through windows", "What shows through a window that isn't solid is blurred.", Kind::Bool, "true"),
     s("blur_strength", Group::Windows, "Blur strength", "1 is slight, 10 is heavy.", Kind::Int { min: 1, max: 10 }, "5"),
     s("blur_layers", Group::Windows, "Shell surfaces to blur behind", "Their names, with commas between; all of a named surface's rectangle is blurred behind, so name only ones that fill theirs. A surface that asks for blur itself gets it without being named.", Kind::Text, ""),
+    s("scroll", Group::Columns, "Windows scroll", "horizontal: columns side by side, scrolling left and right. vertical: rows one under the other, scrolling up and down. auto: vertical on a display taller than it is wide.", Kind::Choice(&["horizontal", "vertical", "auto"]), "horizontal"),
     s("column_widths", Group::Columns, "Column widths", "The widths the next-width key steps through, as parts of the screen.", Kind::Widths, "0.3333,0.5,0.6667"),
     s("default_width", Group::Columns, "A new column's width", "As a part of the screen.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "0.5"),
     s("center_short_columns", Group::Columns, "Centre short columns", "A column made shorter than the screen sits in the middle of its height. Off: at the top.", Kind::Bool, "true"),
@@ -391,6 +392,7 @@ impl Config {
             "animations" => self.animations = boolean(),
             "animation_speed" => self.animation_speed = v.parse().unwrap_or(1.0),
             "column_widths" => self.layout.presets = widths(v).unwrap_or_default(),
+            "scroll" => self.layout.scroll = Scroll::parse(v).unwrap_or_default(),
             "center_short_columns" => self.layout.center_short_columns = boolean(),
             "scratchpad_size" => self.layout.scratchpad_size = v.parse().unwrap_or(0.7),
             "default_width" => self.layout.default_width = v.parse().unwrap_or(0.5),

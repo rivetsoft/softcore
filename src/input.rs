@@ -190,8 +190,7 @@ impl State {
                 let by = if v > 0.0 { 1 } else { -1 };
                 let action = match (mods.shift, by) {
                     (false, by) => Action::FocusWorkspaceBy(by),
-                    (true, 1) => Action::Focus(crate::layout::Dir::Right),
-                    (true, _) => Action::Focus(crate::layout::Dir::Left),
+                    (true, by) => Action::Focus(self.layout.along(by == 1)),
                 };
                 self.do_action(action);
             }

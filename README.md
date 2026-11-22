@@ -135,7 +135,7 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `border_active_to`, `border_inactive_to`, `border_angle`,
 `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
-`animation_speed`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
+`animation_speed`, `scroll`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -144,6 +144,21 @@ A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
 for keys that should work on the lock screen. `Mod` is Super on displays of its own and Alt
 in a window. The actions and the default bindings are in `crates/softcore-settings/src/lib.rs`.
+
+## Scrolling up and down
+
+`scroll=vertical` turns the layout a quarter turn: windows sit in rows one under the other,
+each as wide as the screen, and the strip scrolls up and down. `scroll=auto` does that only
+on a display taller than it is wide, which suits one turned on its side; `horizontal` is
+the usual way. A display's own line can say otherwise (`output.HDMI-A-1=scroll=vertical`).
+A change applies as the file is saved, and the windows slide to their new places.
+
+Everything follows the turn. Up and down go from row to row and left and right between the
+windows sharing a row; a column's width settings (`default_width`, `column_widths`,
+`set-column-width`) are a row's height, and `set-window-height` is a window's width in its
+row. Workspaces, which sit one under the other beside sideways strips, sit side by side
+here. The keys and action names stay as they are: `focus-column-left` means left on the
+screen, and `consume-or-expel-window-left` means towards the row before.
 
 ## Displays
 

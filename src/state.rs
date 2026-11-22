@@ -349,6 +349,7 @@ impl State {
         output.change_current_state(None, Self::rule_transform(&output, rule.as_ref()), scale, Some(loc.into()));
         let size = Self::output_size(&output);
         self.layout.add_monitor(&output.name(), (size.w, size.h));
+        self.layout.set_scroll(&output.name(), rule.as_ref().and_then(|r| r.scroll));
         if self.outputs.is_empty() {
             self.pointer_pos = (loc.0 as f64 + size.w as f64 / 2.0, loc.1 as f64 + size.h as f64 / 2.0).into();
         }
@@ -697,6 +698,7 @@ impl State {
             self.cursors = Cursors::new(&self.config.cursor_theme, self.config.cursor_size);
         }
         for o in self.outputs.clone() {
+            self.layout.set_scroll(&o.name(), self.config.outputs.iter().find(|r| r.name == o.name()).and_then(|r| r.scroll));
             if let Some(r) = self.config.outputs.iter().find(|r| r.name == o.name()).cloned() {
                 o.change_current_state(None, Self::rule_transform(&o, Some(&r)), r.scale.map(smithay::output::Scale::Fractional), r.position.map(Into::into));
                 self.output_resized(&o);
