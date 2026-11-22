@@ -76,6 +76,32 @@ fn serve(state: &mut State, stream: UnixStream) {
             return;
         }
     };
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    // Two requests keep their connection: the answer comes later (when PipeWire has made the
+    // stream, when the person has chosen), and the connection closing means "never mind".
+    match words.as_slice() {
+        ["cast", "start", kind @ ("output" | "window"), target, rest @ ..] => {
+            let source = match *kind {
+                "output" => Some(crate::capture::Source::Output(target.to_string())),
+                _ => target.parse().ok().map(crate::capture::Source::Window),
+            };
+            let started = match source {
+                Some(s) => crate::cast::start(state, s, rest.contains(&"--cursor"), stream),
+                None => Err((format!("{target:?} isn't a window's number"), stream)),
+            };
+            if let Err((e, mut stream)) = started {
+                let _ = writeln!(stream, "{}", json!({"error": e}));
+            }
+            return;
+        }
+        ["pick-cast", rest @ ..] => {
+            let value = |flag: &str| rest.iter().position(|w| *w == flag).and_then(|i| rest.get(i + 1)).copied();
+            let types = value("--types").unwrap_or("output,window");
+            crate::picker::open(state, types.contains("output"), types.contains("window"), value("--app").unwrap_or("").to_string(), stream);
+            return;
+        }
+        _ => {}
+    }
     if args.first().map(String::as_str) == Some("event-stream") {
         // What there is now, then the changes as they come.
         let first = [json!({"WorkspacesChanged": {"workspaces": workspaces(state)}}), json!({"WindowsChanged": {"windows": windows(state)}})];
@@ -105,6 +131,11 @@ fn request(state: &mut State, args: &[String]) -> Result<Value, String> {
         ["focused-output"] => {
             let name = state.active_output().map(|o| o.name());
             Ok(name.and_then(|n| outputs(state).get(&n).cloned()).unwrap_or(Value::Null))
+        }
+        ["casts"] => Ok(crate::cast::list(state)),
+        ["cast", "stop", id] => {
+            let id: u32 = id.parse().map_err(|_| format!("{id:?} isn't a cast's number"))?;
+            if crate::cast::stop(state, id) { Ok(Value::Null) } else { Err(format!("no cast {id}")) }
         }
         ["screenshot", rest @ ..] => {
             state.do_action(Action::Screenshot(rest.first().map(|s| s.to_string())));
@@ -238,7 +269,7 @@ pub fn client(args: &[String]) -> i32 {
     let json_out = args.iter().any(|a| a == "-j" || a == "--json");
     let words: Vec<&String> = args.iter().filter(|a| *a != "-j" && *a != "--json").collect();
     if words.is_empty() {
-        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], event-stream, version");
+        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], casts, cast start output NAME|window ID [--cursor], cast stop ID, pick-cast [--types output,window] [--app NAME], event-stream, version");
         return 2;
     }
     let Some(path) = std::env::var_os("SOFTCORE_SOCKET") else {
@@ -257,6 +288,8 @@ pub fn client(args: &[String]) -> i32 {
         return 1;
     }
     let stream_events = words[0] == "event-stream";
+    // A cast lasts as long as this connection: say its numbers, then stay until stopped.
+    let hold = words.len() > 1 && words[0] == "cast" && words[1] == "start";
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
         if stream_events {
             println!("{line}");
@@ -272,7 +305,9 @@ pub fn client(args: &[String]) -> i32 {
             ok if json_out => println!("{ok}"),
             ok => println!("{}", serde_json::to_string_pretty(ok).unwrap_or_default()),
         }
-        return 0;
+        if !hold {
+            return 0;
+        }
     }
     0
 }

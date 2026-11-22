@@ -90,6 +90,7 @@ pub struct Lock {
 pub struct State {
     pub start: Instant,
     pub dh: DisplayHandle,
+    pub handle: LoopHandle<'static, State>,
     pub signal: LoopSignal,
     pub socket: String,
     /// In a window of another desktop (or with no screen at all), not on a display of its own.
@@ -125,6 +126,13 @@ pub struct State {
     /// Where the next frame drawn should also be saved.
     pub screenshot: Option<PathBuf>,
     pub ipc: Ipc,
+    pub captures: crate::capture::Captures,
+    pub casts: crate::cast::Casts,
+    /// The question of what to share, while it is being asked.
+    pub picker: Option<crate::picker::Picker>,
+    pub output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState,
+    pub toplevel_capture_source_state: smithay::wayland::image_capture_source::ToplevelCaptureSourceState,
+    pub image_copy_capture_state: smithay::wayland::image_copy_capture::ImageCopyCaptureState,
     last_frame: Instant,
     pub animating: bool,
 
@@ -205,9 +213,11 @@ impl State {
         let cursors = Cursors::new(&config.cursor_theme, config.cursor_size);
         let ipc = Ipc::start(&handle, &socket);
 
+        let dh2 = dh.clone();
         State {
             start: Instant::now(),
             dh,
+            handle,
             signal,
             socket,
             nested,
@@ -232,6 +242,12 @@ impl State {
             redraw: true,
             screenshot: None,
             ipc,
+            captures: Default::default(),
+            casts: Default::default(),
+            picker: None,
+            output_capture_source_state: smithay::wayland::image_capture_source::OutputCaptureSourceState::new::<State>(&dh2),
+            toplevel_capture_source_state: smithay::wayland::image_capture_source::ToplevelCaptureSourceState::new::<State>(&dh2),
+            image_copy_capture_state: smithay::wayland::image_copy_capture::ImageCopyCaptureState::new::<State>(&dh2),
             last_frame: Instant::now(),
             animating: false,
             config,
@@ -539,6 +555,9 @@ impl State {
         self.sync_windows();
         self.update_focus();
         self.update_pointer_focus();
+        self.update_capture_sizes();
+        crate::cast::refresh(self);
+        crate::picker::refresh(self);
         crate::ipc::notify(self);
         let _ = self.dh.flush_clients();
     }
@@ -702,6 +721,10 @@ impl State {
 
     /// The surface at a point, and where that surface's corner is.
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        // An open panel of Softcore's own takes the pointer: nothing under it is clicked.
+        if self.ui.panel != Panel::None && !self.lock.locked {
+            return None;
+        }
         let output = self.output_at(pos)?;
         let origin = Self::output_geometry(output).loc.to_f64();
         let local = pos - origin;

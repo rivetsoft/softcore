@@ -3,19 +3,17 @@
 
 use std::time::Duration;
 
-use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{GlesPixelProgram, GlesRenderer, Uniform, UniformName, UniformType};
-use smithay::backend::renderer::ExportMem;
 use smithay::desktop::utils::send_frames_surface_tree;
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::wlr_layer::Layer;
 
@@ -107,7 +105,7 @@ fn logical(r: Rect) -> Rectangle<i32, Logical> {
     Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
 }
 
-fn surface_elements(renderer: &mut GlesRenderer, surface: &WlSurface, at: Point<i32, Logical>, scale: Scale<f64>, alpha: f32, out: &mut Vec<Elem>) {
+pub fn surface_elements(renderer: &mut GlesRenderer, surface: &WlSurface, at: Point<i32, Logical>, scale: Scale<f64>, alpha: f32, out: &mut Vec<Elem>) {
     let loc: Point<i32, Physical> = at.to_physical_precise_round(scale);
     out.extend(render_elements_from_surface_tree::<_, Elem>(renderer, surface, loc, scale, alpha, Kind::Unspecified));
 }
@@ -212,13 +210,15 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
 }
 
 /// Everything on a display, top first, and the colour behind it all.
-pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output) -> (Vec<Elem>, [f32; 4]) {
+pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output, cursor: bool, panels: bool) -> (Vec<Elem>, [f32; 4]) {
     let scale = Scale::from(output.current_scale().fractional_scale());
     let mut out = Vec::new();
     if state.monitors_off {
         return (out, [0.0, 0.0, 0.0, 1.0]);
     }
-    cursor_elements(state, renderer, output, scale, &mut out);
+    if cursor {
+        cursor_elements(state, renderer, output, scale, &mut out);
+    }
     if state.lock.locked {
         // Nothing of the session is drawn while locked, whether or not the lock screen has
         // shown up yet.
@@ -229,8 +229,9 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output)
     }
 
     let size = State::output_size(output);
-    if state.active_output() == Some(output)
-        && let Some((buffer, (w, h))) = state.ui.panel_buffer(&state.config, state.mod_is_alt(), (size.w, size.h))
+    if panels
+        && state.active_output() == Some(output)
+        && let Some((buffer, (w, h))) = state.ui.panel_buffer(&state.config, state.mod_is_alt(), (size.w, size.h), state.picker.as_mut())
     {
         let loc = Point::<i32, Logical>::from(((size.w - w) / 2, (size.h - h) / 2)).to_f64().to_physical(scale);
         if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &buffer, None, None, None, Kind::Unspecified) {
@@ -281,23 +282,4 @@ pub fn frame_done(state: &State, output: &Output) {
     if let CursorImageStatus::Surface(s) = &state.cursor_status {
         send_frames_surface_tree(s, output, time, Some(Duration::ZERO), to);
     }
-}
-
-/// Save what was just drawn as a PNG.
-pub fn save_screenshot(renderer: &mut GlesRenderer, framebuffer: &<GlesRenderer as smithay::backend::renderer::RendererSuper>::Framebuffer<'_>, size: Size<i32, Physical>, flipped: bool, path: &std::path::Path) -> Result<(), String> {
-    let region = Rectangle::<i32, Buffer>::from_size((size.w, size.h).into());
-    let mapping = renderer.copy_framebuffer(framebuffer, region, Fourcc::Abgr8888).map_err(|e| format!("couldn't read the frame back: {e}"))?;
-    let bytes = renderer.map_texture(&mapping).map_err(|e| format!("couldn't read the frame back: {e}"))?;
-    let mut img = image::RgbaImage::from_raw(size.w as u32, size.h as u32, bytes.to_vec()).ok_or("the frame was an unexpected size")?;
-    if flipped {
-        image::imageops::flip_vertical_in_place(&mut img);
-    }
-    // What is behind the desktop isn't see-through in a picture of it.
-    for p in img.pixels_mut() {
-        p.0[3] = 255;
-    }
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    img.save(path).map_err(|e| format!("couldn't write {}: {e}", path.display()))
 }

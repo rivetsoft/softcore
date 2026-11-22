@@ -38,6 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 xcursor = "0.3"
+pipewire = { version = "0.10", features = ["v0_3_34"] }
+zbus = "5"
+blocking = "1"
 
 [workspace]
 members = ["crates/*"]

@@ -239,16 +239,13 @@ impl Udev {
         if !self.active {
             return;
         }
-        if let Some(path) = state.screenshot.take() {
-            tracing::warn!("screenshots of a real display aren't built yet ({} not written)", path.display());
-        }
         for screen in self.screens.values_mut() {
             if screen.pending {
                 // Its turn comes when the frame before is shown.
                 state.redraw = true;
                 continue;
             }
-            let (elements, clear) = render::elements(state, &mut self.renderer, &screen.output);
+            let (elements, clear) = render::elements(state, &mut self.renderer, &screen.output, true, true);
             match screen.surface.render_frame(&mut self.renderer, &elements, clear, FrameFlags::DEFAULT) {
                 Ok(frame) => {
                     if !frame.is_empty {
@@ -262,5 +259,6 @@ impl Udev {
             }
             render::frame_done(state, &screen.output);
         }
+        crate::capture::after_draw(state, &mut self.renderer);
     }
 }

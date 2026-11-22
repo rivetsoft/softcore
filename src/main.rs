@@ -1,12 +1,16 @@
 //! Softcore: the scrolling-tiling Wayland compositor for the Rivet desktop.
 
 mod backend;
+mod capture;
+mod cast;
 mod config;
 mod cursor;
 mod handlers;
 mod input;
 mod ipc;
 mod layout;
+mod picker;
+mod portal;
 mod render;
 mod settings_cli;
 mod state;
@@ -28,6 +32,7 @@ Usage:
   softcore [OPTIONS]        Start Softcore
   softcore msg [-j] WORDS   Ask a running Softcore (softcore msg for the list)
   softcore settings         Show or change settings (softcore settings help)
+  softcore portal           The screen-sharing service apps reach through xdg-desktop-portal
   softcore validate         Check the settings file and say what couldn't be read
 
 Options:
@@ -36,6 +41,7 @@ Options:
   --headless           With no screen: a display in memory, for checks and screenshots
   --size WIDTHxHEIGHT  The headless display's size (1280x800)
   --spawn COMMAND      Run a command once started (may be given more than once)
+  --portal             Also run the screen-sharing service (always on, on displays of its own)
   -h, --help           This
   -V, --version        The version
 
@@ -53,6 +59,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("msg") => std::process::exit(ipc::client(&args[1..])),
+        Some("portal") => std::process::exit(portal::run()),
         Some("settings") => std::process::exit(settings_cli::run(&args[1..])),
         Some("validate") => {
             let c = config::load();
@@ -78,12 +85,14 @@ fn main() {
     let mut place = Where::Auto;
     let mut size = (1280, 800);
     let mut spawn = Vec::new();
+    let mut portal = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--winit" => place = Where::Winit,
             "--headless" => place = Where::Headless,
             "--tty" => place = Where::Tty,
+            "--portal" => portal = true,
             "--size" => match it.next().and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))) {
                 Some(s) => size = s,
                 None => fail("--size needs a size like 1280x800"),
@@ -141,6 +150,16 @@ fn main() {
 
     if !state.config.errors.is_empty() {
         state.ui.show(ui::Panel::Errors);
+    }
+    // On displays of its own Softcore is the session: tell D-Bus and systemd where it is, so
+    // what they start (the portal, apps) finds it, and run the screen-sharing service.
+    if !state.nested {
+        state.spawn("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET");
+    }
+    if (portal || !state.nested)
+        && let Ok(exe) = std::env::current_exe()
+    {
+        state.spawn(&format!("exec '{}' portal", exe.display().to_string().replace('\'', "'\\''")));
     }
     for c in state.config.spawn.clone().iter().chain(&spawn) {
         state.spawn(c);

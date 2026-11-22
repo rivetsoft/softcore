@@ -19,7 +19,12 @@ pub enum Panel {
     Keys,
     Quit,
     Errors,
+    /// Choosing what to share (see picker.rs).
+    Share,
 }
+
+/// The size of a picture in the sharing picker.
+pub const THUMB: (f32, f32) = (168.0, 100.0);
 
 /// The colours and radius the compositor draws windows with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -62,6 +67,21 @@ impl Ui {
             self.panel = panel;
             self.dirty = true;
         }
+    }
+
+    /// Paint the panel again next frame (what it shows changed).
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// The open panel's size, once it has been painted.
+    pub fn panel_size(&self) -> Option<(i32, i32)> {
+        self.buffer.as_ref().map(|(_, s)| *s)
+    }
+
+    /// A picture for a panel to show.
+    pub fn texture(&mut self, name: &str, image: egui::ColorImage) -> egui::TextureHandle {
+        self.ctx.load_texture(name, image, egui::TextureOptions::LINEAR)
     }
 
     pub fn settings_changed(&mut self, _c: &Config) {
@@ -114,7 +134,7 @@ impl Ui {
     }
 
     /// The open panel as a picture and its size, painted again only when it changed.
-    pub fn panel_buffer(&mut self, c: &Config, mod_is_alt: bool, screen: (i32, i32)) -> Option<(MemoryRenderBuffer, (i32, i32))> {
+    pub fn panel_buffer(&mut self, c: &Config, mod_is_alt: bool, screen: (i32, i32), mut picker: Option<&mut crate::picker::Picker>) -> Option<(MemoryRenderBuffer, (i32, i32))> {
         if self.panel == Panel::None {
             self.buffer = None;
             return None;
@@ -123,6 +143,11 @@ impl Ui {
         let size = match self.panel {
             Panel::Keys => fit(820, 84 + 28 * key_rows(c).len().div_ceil(2) as i32),
             Panel::Quit => fit(440, 150),
+            Panel::Share => {
+                let n = picker.as_ref().map_or(1, |p| p.items.len()) as i32;
+                let per_row = n.clamp(2, 4);
+                fit(40 + per_row * (THUMB.0 as i32 + 28), 150 + ((n + per_row - 1) / per_row) * (THUMB.1 as i32 + 78))
+            }
             _ => fit(640, 160 + 24 * c.errors.len().min(12) as i32),
         };
         if !self.dirty
@@ -131,14 +156,14 @@ impl Ui {
         {
             return Some((b.clone(), *s));
         }
-        let pixels = self.paint(c, mod_is_alt, size);
+        let pixels = self.paint(c, mod_is_alt, size, picker.as_deref_mut());
         let buffer = MemoryRenderBuffer::from_slice(&pixels, Fourcc::Abgr8888, size, 1, Transform::Normal, None);
         self.buffer = Some((buffer.clone(), size));
         self.dirty = false;
         Some((buffer, size))
     }
 
-    fn paint(&mut self, c: &Config, mod_is_alt: bool, size: (i32, i32)) -> Vec<u8> {
+    fn paint(&mut self, c: &Config, mod_is_alt: bool, size: (i32, i32), mut picker: Option<&mut crate::picker::Picker>) -> Vec<u8> {
         let ch = choice(c);
         let ctx = self.ctx.clone();
         let live = &mut self.live;
@@ -176,6 +201,11 @@ impl Ui {
                             key_cap(ui, "Esc");
                             ui.weak("Close");
                         });
+                    }
+                    Panel::Share => {
+                        if let Some(p) = picker.as_deref_mut() {
+                            share(ui, p);
+                        }
                     }
                     Panel::None => {}
                 }
@@ -243,4 +273,52 @@ fn key_rows(c: &Config) -> Vec<(String, String)> {
         rows.push((shown, label));
     }
     rows
+}
+
+/// The sharing picker: a card for each display and window, the chosen one outlined.
+fn share(ui: &mut egui::Ui, p: &mut crate::picker::Picker) {
+    ui.heading(if p.app.is_empty() { "Share your screen".to_string() } else { format!("{} wants to share your screen", p.app) });
+    ui.add_space(4.0);
+    ui.weak("Choose a display or a window. It is shared until the app stops, or you close it.");
+    ui.add_space(12.0);
+    let v = ui.visuals().clone();
+    let mut rects = Vec::new();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        for (i, item) in p.items.iter().enumerate() {
+            let chosen = i == p.selected;
+            let frame = egui::Frame::new()
+                .fill(if chosen { v.selection.bg_fill.gamma_multiply(0.35) } else { v.faint_bg_color })
+                .stroke(if chosen { egui::Stroke::new(2.0, v.selection.bg_fill) } else { v.widgets.noninteractive.bg_stroke })
+                .corner_radius(theme::r_md())
+                .inner_margin(8.0);
+            let shown = frame.show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(THUMB.0);
+                    let (area, _) = ui.allocate_exact_size(egui::vec2(THUMB.0, THUMB.1), egui::Sense::hover());
+                    ui.painter().rect_filled(area, theme::r_sm(), v.extreme_bg_color);
+                    if let Some(t) = &item.thumb {
+                        // The picture keeps its shape, in the middle of its place.
+                        let size = t.size_vec2();
+                        let k = (area.width() / size.x).min(area.height() / size.y);
+                        let fitted = Rect::from_center_size(area.center(), size * k);
+                        egui::Image::new(egui::load::SizedTexture::new(t.id(), fitted.size())).paint_at(ui, fitted);
+                    }
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new(&item.title).strong()).truncate());
+                    ui.add(egui::Label::new(RichText::new(&item.detail).weak()).truncate());
+                });
+            });
+            rects.push(shown.response.rect);
+        }
+    });
+    p.rects = rects;
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        key_cap(ui, "Enter");
+        ui.label("Share");
+        ui.add_space(16.0);
+        key_cap(ui, "Esc");
+        ui.label("Cancel");
+    });
 }

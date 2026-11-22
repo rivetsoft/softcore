@@ -132,9 +132,7 @@ pub fn init_winit(event_loop: &EventLoop<'static, State>, state: &mut State) -> 
 
 impl Winit {
     fn draw(&mut self, state: &mut State) {
-        let size = self.backend.window_size();
-        let shot = state.screenshot.take();
-        let age = if shot.is_some() { 0 } else { self.backend.buffer_age().unwrap_or(0) };
+        let age = self.backend.buffer_age().unwrap_or(0);
         let egl_display = self.backend.renderer().egl_context().display().get_display_handle().handle;
         let first = !std::mem::replace(&mut self.unthrottled, true);
         let damage = {
@@ -145,7 +143,7 @@ impl Winit {
                     return;
                 }
             };
-            let (elements, clear) = render::elements(state, renderer, &self.output);
+            let (elements, clear) = render::elements(state, renderer, &self.output, true, true);
             let damage = match self.tracker.render_output(renderer, &mut fb, age, &elements, clear) {
                 Ok(r) => r.damage.cloned(),
                 Err(e) => {
@@ -160,17 +158,13 @@ impl Winit {
                     smithay::backend::egl::ffi::egl::SwapInterval(egl_display, 0);
                 }
             }
-            if let Some(path) = shot
-                && let Err(e) = render::save_screenshot(renderer, &fb, size, true, &path)
-            {
-                tracing::warn!("{e}");
-            }
             damage
         };
         if let Some(damage) = damage {
             let _ = self.backend.submit(Some(&damage));
         }
         render::frame_done(state, &self.output);
+        crate::capture::after_draw(state, self.backend.renderer());
     }
 }
 
@@ -211,22 +205,15 @@ pub fn init_headless(event_loop: &EventLoop<'static, State>, state: &mut State, 
 
 impl Headless {
     fn draw(&mut self, state: &mut State) {
-        let shot = state.screenshot.take();
-        let age = if shot.is_some() { 0 } else { 1 };
-        let (elements, clear) = render::elements(state, &mut self.renderer, &self.output);
-        let size = self.output.current_mode().map(|m| m.size).unwrap_or_default();
+        let (elements, clear) = render::elements(state, &mut self.renderer, &self.output, true, true);
         {
             let Ok(mut fb) = self.renderer.bind(&mut self.target) else { return };
-            if let Err(e) = self.tracker.render_output(&mut self.renderer, &mut fb, age, &elements, clear) {
+            if let Err(e) = self.tracker.render_output(&mut self.renderer, &mut fb, 1, &elements, clear) {
                 tracing::warn!("couldn't draw a frame: {e:?}");
                 return;
             }
-            if let Some(path) = shot
-                && let Err(e) = render::save_screenshot(&mut self.renderer, &fb, size, false, &path)
-            {
-                tracing::warn!("{e}");
-            }
         }
         render::frame_done(state, &self.output);
+        crate::capture::after_draw(state, &mut self.renderer);
     }
 }

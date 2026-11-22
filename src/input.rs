@@ -26,6 +26,17 @@ impl State {
         if vt < 12 {
             return Some(Some(Action::ChangeVt(vt as i32 + 1)));
         }
+        if self.ui.panel == Panel::Share && !self.lock.locked {
+            let chosen = self.picker.as_ref().map(|p| p.selected);
+            match sym {
+                Keysym::Left | Keysym::Up => crate::picker::select(self, -1),
+                Keysym::Right | Keysym::Down | Keysym::Tab => crate::picker::select(self, 1),
+                Keysym::Return | Keysym::KP_Enter => crate::picker::finish(self, chosen),
+                Keysym::Escape => crate::picker::finish(self, None),
+                _ => {}
+            }
+            return Some(None);
+        }
         if self.ui.panel != Panel::None && !self.lock.locked {
             // An open panel has the keyboard to itself.
             let quit = self.ui.panel == Panel::Quit && matches!(sym, Keysym::Return | Keysym::KP_Enter);
@@ -111,6 +122,7 @@ impl State {
 
     fn pointer_moved(&mut self, pos: Point<f64, Logical>, time: smithay::backend::input::InputTime) {
         self.pointer_pos = pos;
+        crate::picker::hover(self, pos);
         let under = self.surface_under(pos);
         let pointer = self.seat.get_pointer().unwrap();
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
@@ -120,6 +132,12 @@ impl State {
 
     /// A click gives the keyboard to what was clicked: a window, or a panel that takes keys.
     fn clicked(&mut self, pos: Point<f64, Logical>) {
+        if self.ui.panel == Panel::Share {
+            if let Some(i) = crate::picker::item_at(self, pos) {
+                crate::picker::finish(self, Some(i));
+            }
+            return;
+        }
         if let Some(name) = self.output_at(pos).map(|o| o.name()) {
             self.layout.set_active_monitor(&name);
         }

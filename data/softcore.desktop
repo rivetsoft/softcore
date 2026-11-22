@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Softcore
+Comment=The scrolling-tiling compositor for the Rivet desktop
+Exec=softcore
+Type=Application
+DesktopNames=softcore

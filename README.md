@@ -136,11 +136,52 @@ softcore msg event-stream       # a line whenever workspaces, windows or the foc
 The socket is `$SOFTCORE_SOCKET`, set for everything Softcore starts. A request is one line, a
 JSON array of words; the answer is `{"ok": …}` or `{"error": "…"}`.
 
+## Sharing the screen
+
+An app in a call, or a recorder, can share a display or one window:
+
+1. The app asks xdg-desktop-portal, which asks Softcore's own service (`softcore portal`).
+2. Softcore shows its picker: a card for each display and window with a small live picture,
+   in the Rivet look. Arrows and Enter, or a click, choose; Esc says no. Softcore draws the
+   picker itself, so no program can cover it, imitate it or answer it for you.
+3. Softcore starts a PipeWire stream of what was chosen and the app reads it. A shared
+   window keeps being shared when it scrolls out of view or is on another workspace, and
+   the stream follows it when it is resized.
+4. The stream ends when the app ends it, when the window closes, or when whoever asked goes
+   away for any reason. Nothing is left sharing by accident.
+
+The same without an app, which is also how to check it:
+
+```sh
+softcore msg pick-cast                         # shows the picker, prints the choice
+softcore msg cast start output DP-5 --cursor   # prints the PipeWire node; shares until stopped (Ctrl+C)
+softcore msg cast start window 4
+softcore msg casts                             # what is being shared now
+gst-launch-1.0 pipewiresrc path=NODE ! videoconvert ! autovideosink
+```
+
+Programs that capture the screen directly (`grim`, and screenshots from a shell) work too,
+through ext-image-copy-capture.
+
+For apps to reach it, three files from `data/` need installing (a package would do this):
+
+| File | Where |
+| --- | --- |
+| `softcore.portal` | `/usr/share/xdg-desktop-portal/portals/` or `~/.local/share/xdg-desktop-portal/portals/` |
+| `softcore-portals.conf` | `/usr/share/xdg-desktop-portal/` or `~/.config/xdg-desktop-portal/` |
+| `softcore.desktop` | `/usr/share/wayland-sessions/`, for login managers |
+
+On displays of its own Softcore runs `softcore portal` itself; in a window, `--portal` does.
+
+Frames are copied through memory, which is simple and works everywhere, and costs more than
+it should on a 4K display: handing the GPU's own buffers to PipeWire is the next step there.
+
 ## What clients get
 
 xdg-shell with server-side decorations, layer-shell, session lock, the clipboard, primary
 selection and data-control, drag and drop, idle notify and idle inhibit, xdg-activation,
-foreign-toplevel-list, virtual keyboards and pointers, fractional scale, viewporter,
+foreign-toplevel-list, screen capture (ext-image-copy-capture, of displays and of windows),
+virtual keyboards and pointers, fractional scale, viewporter,
 cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dmabuf).
 
 ## What isn't built yet
@@ -152,9 +193,10 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   devices (`wtype`, `wlrctl`), which take the same path; libinput devices, and with them
   touchpad settings, wait for the first run on hardware. The wheel and menus that close on
   a click outside are written but not checked.
-- Screen capture for other programs (screencopy, so screenshots and screen sharing from
-  Rivet Shell or a portal), and screenshots of a real display. `softcore msg screenshot`
-  works in a window and headless.
+- Screen sharing from a real app. Every part is checked on its own (the D-Bus service
+  called by hand, the picker, the stream read by GStreamer), but not yet a browser going
+  through xdg-desktop-portal, which needs a Softcore session and the files above installed.
+  Sharing more than one thing in one request, and remembering a choice, aren't built.
 - X11 apps (no Xwayland), input methods, pointer locks for games, touch and tablets, touchpad
   gestures, presentation timing.
 - Window rules, named workspaces, tabbed columns, moving and resizing floating windows with
