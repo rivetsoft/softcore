@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+pub use crate::config::WorkspaceRef;
+
 pub type WinId = u32;
 
 /// A rectangle in a display's logical pixels.
@@ -66,11 +68,15 @@ pub struct Workspace {
     /// Which way it scrolls, when it was told: it keeps that wherever it goes. None: as
     /// the display it is on does.
     pub scroll: Option<Scroll>,
+    /// A workspace with a name is one the settings ask for: it stays when it is empty.
+    pub name: Option<String>,
+    /// Which way its own line in the settings says it scrolls.
+    pub named_scroll: Option<Scroll>,
 }
 
 impl Workspace {
     fn new(id: u64) -> Workspace {
-        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new(), scroll: None }
+        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new(), scroll: None, name: None, named_scroll: None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -206,7 +212,7 @@ impl Monitor {
     /// Whether one of its workspaces scrolls up and down: as the workspace was told, else
     /// as the display does.
     pub fn ws_vertical(&self, ws: &Workspace, o: &Options) -> bool {
-        match ws.scroll {
+        match ws.scroll.or(ws.named_scroll) {
             Some(Scroll::Horizontal) => false,
             Some(Scroll::Vertical) => true,
             Some(Scroll::Auto) => self.size.1 > self.size.0,
@@ -293,11 +299,55 @@ pub struct Layout {
     pub scratch: Vec<WinId>,
     /// Windows out of the scratchpad and on show: the scratchpad key puts these away again.
     shown: Vec<WinId>,
+    /// The scratchpad each of those windows belongs to, when it is one with a name.
+    scratch_names: HashMap<WinId, String>,
+    /// How much of the screen a named scratchpad's window takes, where its line says.
+    scratch_sizes: HashMap<String, f64>,
+    /// Fingers on the touchpad, moving what is in view.
+    swipe: Option<Swipe>,
+}
+
+/// A swipe on the touchpad, from fingers down to fingers up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Swipe {
+    /// How far the fingers have gone, before it is clear which way they are going.
+    moved: (f64, f64),
+    /// Along the strip of windows, or across it through the workspaces. None: not yet clear.
+    along: Option<bool>,
+}
+
+/// How a window opens.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Open<'a> {
+    pub floating: bool,
+    pub output: Option<&'a str>,
+    pub workspace: Option<&'a WorkspaceRef>,
+    /// Part of the screen's width.
+    pub width: Option<f64>,
+    pub maximized: bool,
+    /// False: it opens where it is told and the focus stays where it was.
+    pub focus: bool,
+}
+
+impl Default for Open<'_> {
+    fn default() -> Self {
+        Open { floating: false, output: None, workspace: None, width: None, maximized: false, focus: true }
+    }
+}
+
+/// What the scratchpad key did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scratch {
+    /// What was on show is put away.
+    Hidden,
+    Shown(WinId),
+    /// There was nothing to show.
+    Empty,
 }
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), floats: HashMap::new(), scratch: Vec::new(), shown: Vec::new() }
+        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), floats: HashMap::new(), scratch: Vec::new(), shown: Vec::new(), scratch_names: HashMap::new(), scratch_sizes: HashMap::new(), swipe: None }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -322,7 +372,7 @@ impl Layout {
             for m in &mut self.mons {
                 let mut i = 0;
                 while i < m.wss.len() {
-                    if m.wss[i].home == name && !m.wss[i].is_empty() {
+                    if m.wss[i].home == name && (!m.wss[i].is_empty() || m.wss[i].name.is_some()) {
                         let at = new.wss.len() - 1;
                         new.wss.insert(at, m.wss.remove(i));
                         // The one in view stays in view, or the one that took its place.
@@ -351,7 +401,7 @@ impl Layout {
         let to = if i == 0 { 0 } else { i - 1 };
         let m = &mut self.mons[to];
         let at = m.wss.len() - 1;
-        for (k, ws) in gone.wss.into_iter().filter(|w| !w.is_empty()).enumerate() {
+        for (k, ws) in gone.wss.into_iter().filter(|w| !w.is_empty() || w.name.is_some()).enumerate() {
             m.wss.insert(at + k, ws);
         }
         if self.active_mon >= self.mons.len() || self.active_mon == i {
@@ -477,26 +527,184 @@ impl Layout {
     // ---- windows coming and going ----
 
     /// A new window: a column of its own, right of the focused one (or floating over them).
+    #[cfg(test)]
     pub fn add_window(&mut self, id: WinId, floating: bool, on: Option<&str>) {
-        if let Some(i) = on.and_then(|n| self.monitor(n)) {
-            self.active_mon = i;
+        self.open_window(id, Open { floating, output: on, ..Default::default() });
+    }
+
+    /// A new window, where and how its rules say.
+    pub fn open_window(&mut self, id: WinId, open: Open) {
+        // The workspace it names, else the one in view on the display it names, else the
+        // one with the focus.
+        let (mi, wi) = match open.workspace.and_then(|w| self.workspace_at(w)) {
+            Some(at) => at,
+            None => {
+                let mi = open.output.and_then(|n| self.monitor(n)).unwrap_or(self.active_mon);
+                let Some(m) = self.mons.get(mi) else { return };
+                (mi, m.active)
+            }
+        };
+        let width = open.width.unwrap_or(self.opts.default_width);
+        let ws = &mut self.mons[mi].wss[wi];
+        let was = (ws.active, ws.float_focus, ws.cols.is_empty() && ws.floating.is_empty());
+        if open.focus {
+            // It is not to open out of sight behind a window that has the whole screen.
+            ws.fullscreen = None;
         }
-        let width = self.opts.default_width;
-        let Some(ws) = self.ws() else { return };
-        // It is not to open out of sight behind a window that has the whole screen.
-        ws.fullscreen = None;
-        if floating {
+        if open.floating {
             ws.floating.push(id);
             ws.float_focus = Some(id);
         } else {
-            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false });
+            ws.insert_column(Column { wins: vec![id], active: 0, width, maximized: open.maximized, tabbed: false });
         }
+        if open.focus {
+            self.active_mon = mi;
+            self.mons[mi].active = wi;
+        } else if !was.2 {
+            // The focus stays with what had it. The new column went in after it.
+            ws.active = was.0;
+            ws.float_focus = was.1;
+            if open.floating && was.1.is_some() {
+                // Under the floating window that has the focus, not over it.
+                let n = ws.floating.len();
+                ws.floating.swap(n - 1, n - 2);
+            }
+        }
+        self.settle();
+    }
+
+    // ---- workspaces with names ----
+
+    /// The workspaces the settings name, in their order: each is made if it isn't there,
+    /// on the display it asks for, and kept when empty. One whose line has gone is a
+    /// workspace like any other again.
+    pub fn set_named_workspaces(&mut self, wanted: &[(String, Option<String>, Option<Scroll>)]) {
+        if self.mons.is_empty() {
+            return;
+        }
+        for ws in self.mons.iter_mut().flat_map(|m| m.wss.iter_mut()) {
+            if ws.name.as_ref().is_some_and(|n| !wanted.iter().any(|w| w.0 == *n)) {
+                ws.name = None;
+                ws.named_scroll = None;
+            }
+        }
+        for (name, output, scroll) in wanted {
+            let to = output.as_deref().and_then(|o| self.monitor(o));
+            let at = self.workspace_at(&WorkspaceRef::Name(name.clone()));
+            let mut ws = match at {
+                // Where it should be already.
+                Some((mi, wi)) if to.is_none_or(|t| t == mi) => {
+                    let ws = &mut self.mons[mi].wss[wi];
+                    ws.named_scroll = *scroll;
+                    if let Some(o) = output {
+                        ws.home.clone_from(o);
+                    }
+                    continue;
+                }
+                Some((mi, wi)) => {
+                    let m = &mut self.mons[mi];
+                    let ws = m.wss.remove(wi);
+                    if wi < m.active {
+                        m.active -= 1;
+                        m.pos = (m.pos - 1.0).max(0.0);
+                    }
+                    ws
+                }
+                None => {
+                    let mut ws = self.new_ws();
+                    ws.name = Some(name.clone());
+                    ws
+                }
+            };
+            ws.named_scroll = *scroll;
+            ws.home = output.clone().unwrap_or_default();
+            // After the named ones already there, before the rest.
+            let m = &mut self.mons[to.unwrap_or(0)];
+            let i = m.wss.iter().take_while(|w| w.name.is_some()).count();
+            let fresh = m.wss.len() == 1 && m.wss[0].is_empty() && m.wss[0].name.is_none();
+            m.wss.insert(i, ws);
+            // A display that had nothing yet starts on its first named workspace.
+            if i <= m.active && !fresh {
+                m.active += 1;
+                m.pos += 1.0;
+            }
+        }
+        self.settle();
+    }
+
+    /// The display and place in its stack of a workspace: a number counts on the focused
+    /// display, a name is looked for on all of them.
+    pub fn workspace_at(&self, r: &WorkspaceRef) -> Option<(usize, usize)> {
+        match r {
+            WorkspaceRef::Index(i) => {
+                let m = self.mons.get(self.active_mon)?;
+                Some((self.active_mon, (*i).min(m.wss.len().checked_sub(1)?)))
+            }
+            WorkspaceRef::Name(n) => self.mons.iter().enumerate().find_map(|(mi, m)| m.wss.iter().position(|w| w.name.as_deref() == Some(n.as_str())).map(|wi| (mi, wi))),
+        }
+    }
+
+    /// Show a workspace, on whichever display it is.
+    pub fn focus_workspace_ref(&mut self, r: &WorkspaceRef) {
+        let Some((mi, wi)) = self.workspace_at(r) else { return };
+        self.active_mon = mi;
+        self.mons[mi].active = wi;
+        self.settle();
+    }
+
+    /// Send the focused column (or just the focused window) to a workspace, on whichever
+    /// display it is; the focus goes with it.
+    pub fn move_to_workspace_ref(&mut self, r: &WorkspaceRef, whole_column: bool) {
+        let Some((tm, to)) = self.workspace_at(r) else { return };
+        let width = self.opts.default_width;
+        let from_mon = self.active_mon;
+        let Some(m) = self.mons.get_mut(from_mon) else { return };
+        if (tm, to) == (from_mon, m.active) {
+            return;
+        }
+        // The target's id, to find it again if taking the window away shifts the stack.
+        let target = self.mons[tm].wss[to].id;
+        let m = &mut self.mons[from_mon];
+        let ws = &mut m.wss[m.active];
+        let moved = if let Some(f) = ws.float_focus {
+            ws.remove(f);
+            Err(f)
+        } else {
+            if ws.cols.is_empty() {
+                return;
+            }
+            let a = ws.active;
+            Ok(if whole_column || ws.cols[a].wins.len() == 1 {
+                if ws.cols[a].wins.iter().any(|w| ws.fullscreen == Some(*w)) {
+                    ws.fullscreen = None;
+                }
+                let c = ws.cols.remove(a);
+                ws.active = a.saturating_sub(1);
+                c
+            } else {
+                let id = ws.cols[a].wins[ws.cols[a].active];
+                ws.remove(id);
+                Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false }
+            })
+        };
+        let Some(to) = self.mons[tm].wss.iter().position(|w| w.id == target) else { return };
+        let t = &mut self.mons[tm].wss[to];
+        match moved {
+            Ok(col) => t.insert_column(col),
+            Err(f) => {
+                t.floating.push(f);
+                t.float_focus = Some(f);
+            }
+        }
+        self.active_mon = tm;
+        self.mons[tm].active = to;
         self.settle();
     }
 
     pub fn remove_window(&mut self, id: WinId) {
         self.scratch.retain(|w| *w != id);
         self.shown.retain(|w| *w != id);
+        self.scratch_names.remove(&id);
         self.floats.remove(&id);
         for m in &mut self.mons {
             for ws in &mut m.wss {
@@ -843,28 +1051,47 @@ impl Layout {
 
     // ---- the scratchpad ----
 
-    /// Put the focused window away: out of sight, on no workspace, until asked for.
-    pub fn move_to_scratchpad(&mut self) {
+    /// Put the focused window away: out of sight, on no workspace, until asked for. With a
+    /// name it goes into that scratchpad, which has a key of its own.
+    pub fn move_to_scratchpad(&mut self, name: Option<&str>) {
         let Some(id) = self.active_window() else { return };
         if let Some(ws) = self.ws() {
             ws.remove(id);
         }
-        self.heights.remove(&id);
-        self.shown.retain(|w| *w != id);
-        self.scratch.push(id);
+        self.put_away(id, name);
         self.settle();
     }
 
-    /// The scratchpad windows on show on the workspace in view.
-    pub fn scratchpad_in_view(&self) -> Vec<WinId> {
-        self.active_workspace().map(|ws| ws.floating.iter().copied().filter(|w| self.shown.contains(w)).collect()).unwrap_or_default()
+    /// Put a window that is on no workspace into a scratchpad: one that opens there.
+    pub fn put_away(&mut self, id: WinId, name: Option<&str>) {
+        self.heights.remove(&id);
+        self.shown.retain(|w| *w != id);
+        self.scratch.retain(|w| *w != id);
+        self.scratch.push(id);
+        match name {
+            Some(n) => self.scratch_names.insert(id, n.to_string()),
+            None => self.scratch_names.remove(&id),
+        };
+    }
+
+    /// How much of the screen each named scratchpad's window takes, where its line says.
+    pub fn set_scratchpad_sizes(&mut self, sizes: HashMap<String, f64>) {
+        self.scratch_sizes = sizes;
+    }
+
+    fn in_scratchpad(&self, id: WinId, name: Option<&str>) -> bool {
+        self.scratch_names.get(&id).map(String::as_str) == name
+    }
+
+    /// A scratchpad's windows on show on the workspace in view.
+    pub fn scratchpad_in_view(&self, name: Option<&str>) -> Vec<WinId> {
+        self.active_workspace().map(|ws| ws.floating.iter().copied().filter(|w| self.shown.contains(w) && self.in_scratchpad(*w, name)).collect()).unwrap_or_default()
     }
 
     /// The scratchpad key: put away what is on show here; else show the next window put
     /// away, floating over this workspace; else bring over one on show somewhere else.
-    /// Says which window came into view.
-    pub fn toggle_scratchpad(&mut self) -> Option<WinId> {
-        let here = self.scratchpad_in_view();
+    pub fn toggle_scratchpad(&mut self, name: Option<&str>) -> Scratch {
+        let here = self.scratchpad_in_view(name);
         if !here.is_empty() {
             for id in here {
                 if let Some(ws) = self.ws() {
@@ -874,20 +1101,26 @@ impl Layout {
                 self.scratch.push(id);
             }
             self.settle();
-            return None;
+            return Scratch::Hidden;
         }
-        let id = if self.scratch.is_empty() { *self.shown.first()? } else { self.scratch.remove(0) };
+        let id = match self.scratch.iter().position(|w| self.in_scratchpad(*w, name)) {
+            Some(i) => self.scratch.remove(i),
+            None => match self.shown.iter().find(|w| self.in_scratchpad(**w, name)) {
+                Some(id) => *id,
+                None => return Scratch::Empty,
+            },
+        };
         if let Some((mi, wi)) = self.find(id) {
             self.mons[mi].wss[wi].remove(id);
         }
         if !self.shown.contains(&id) {
             self.shown.push(id);
         }
-        let ws = self.ws()?;
+        let Some(ws) = self.ws() else { return Scratch::Empty };
         ws.floating.push(id);
         ws.float_focus = Some(id);
         self.settle();
-        Some(id)
+        Scratch::Shown(id)
     }
 
     // ---- floating windows ----
@@ -918,7 +1151,7 @@ impl Layout {
             return None;
         }
         let m = &self.mons[self.find(id)?.0];
-        let by = self.opts.scratchpad_size;
+        let by = self.scratch_names.get(&id).and_then(|n| self.scratch_sizes.get(n)).copied().unwrap_or(self.opts.scratchpad_size);
         Some((((m.area.w as f64 * by).round() as i32).max(1), ((m.area.h as f64 * by).round() as i32).max(1)))
     }
 
@@ -929,6 +1162,7 @@ impl Layout {
         if ws.floating.contains(&id) {
             // Into a column, it is a window like any other again.
             self.shown.retain(|w| *w != id);
+            self.scratch_names.remove(&id);
             let ws = &mut self.mons[mi].wss[wi];
             ws.floating.retain(|w| *w != id);
             ws.float_focus = None;
@@ -957,42 +1191,9 @@ impl Layout {
     }
 
     /// Send the focused column (or just the focused window) to another workspace of the same
-    /// display; the focus goes with it.
+    /// display (from 0); the focus goes with it.
     pub fn move_to_workspace(&mut self, idx: usize, whole_column: bool) {
-        let width = self.opts.default_width;
-        let Some(m) = self.mons.get_mut(self.active_mon) else { return };
-        let to = idx.min(m.wss.len() - 1);
-        if to == m.active {
-            return;
-        }
-        let from = m.active;
-        let ws = &mut m.wss[from];
-        if let Some(f) = ws.float_focus {
-            ws.remove(f);
-            let t = &mut m.wss[to];
-            t.floating.push(f);
-            t.float_focus = Some(f);
-        } else {
-            if ws.cols.is_empty() {
-                return;
-            }
-            let a = ws.active;
-            let col = if whole_column || ws.cols[a].wins.len() == 1 {
-                if ws.cols[a].wins.iter().any(|w| ws.fullscreen == Some(*w)) {
-                    ws.fullscreen = None;
-                }
-                let c = ws.cols.remove(a);
-                ws.active = a.saturating_sub(1);
-                c
-            } else {
-                let id = ws.cols[a].wins[ws.cols[a].active];
-                ws.remove(id);
-                Column { wins: vec![id], active: 0, width, maximized: false, tabbed: false }
-            };
-            m.wss[to].insert_column(col);
-        }
-        m.active = to;
-        self.settle();
+        self.move_to_workspace_ref(&WorkspaceRef::Index(idx), whole_column);
     }
 
     pub fn move_to_workspace_by(&mut self, by: i32, whole_column: bool) {
@@ -1044,6 +1245,86 @@ impl Layout {
         self.settle();
     }
 
+    // ---- fingers on the touchpad ----
+
+    /// Fingers down: what is in view follows them from here.
+    pub fn swipe_begin(&mut self) {
+        self.swipe = Some(Swipe { moved: (0.0, 0.0), along: None });
+    }
+
+    /// The fingers moved by this much on the screen. Along the strip, the windows scroll
+    /// with them; across it, the workspaces do.
+    pub fn swipe_update(&mut self, dx: f64, dy: f64) {
+        let Some(mut sw) = self.swipe else { return };
+        let o = self.opts.clone();
+        let Some(m) = self.mons.get_mut(self.active_mon) else { return };
+        let vertical = m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, &o));
+        sw.moved.0 += dx;
+        sw.moved.1 += dy;
+        // Which way they are going is clear once they have gone a little way.
+        let (mut along_by, mut across_by) = if vertical { (dy, dx) } else { (dx, dy) };
+        if sw.along.is_none() {
+            let (a, c) = if vertical { (sw.moved.1, sw.moved.0) } else { (sw.moved.0, sw.moved.1) };
+            if a.abs().max(c.abs()) < 8.0 {
+                self.swipe = Some(sw);
+                return;
+            }
+            sw.along = Some(a.abs() >= c.abs());
+            (along_by, across_by) = (a, c);
+        }
+        if sw.along == Some(true) {
+            let area = m.strip_area(vertical);
+            let ws = &mut m.wss[m.active];
+            if let Some(last) = ws.cols.len().checked_sub(1) {
+                let room = (area.w - 2 * o.gaps_out) as f64;
+                let end = (ws.col_x(last, &area, &o) + ws.col_width(last, &area, &o)) as f64;
+                ws.view = (ws.view - along_by).clamp(0.0, (end - room).max(0.0));
+                ws.view_to = ws.view;
+            }
+        } else {
+            // Workspaces lie the other way from the windows of the display.
+            let screen = if m.vertical(&o) { m.size.0 } else { m.size.1 }.max(1) as f64;
+            m.pos = (m.pos - across_by / screen).clamp(0.0, (m.wss.len() - 1) as f64);
+        }
+        self.swipe = Some(sw);
+    }
+
+    /// Fingers up: the nearest column, or workspace, is the one that stays.
+    pub fn swipe_end(&mut self) {
+        let Some(sw) = self.swipe.take() else { return };
+        let o = self.opts.clone();
+        let Some(m) = self.mons.get_mut(self.active_mon) else { return };
+        match sw.along {
+            Some(true) => {
+                let vertical = m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, &o));
+                let area = m.strip_area(vertical);
+                let ws = &mut m.wss[m.active];
+                // The column with the focus if it is still whole in view; else the one
+                // nearest the middle of what is.
+                let room = (area.w - 2 * o.gaps_out) as f64;
+                let whole = |ws: &Workspace, i: usize| {
+                    let (x, w) = (ws.col_x(i, &area, &o) as f64, ws.col_width(i, &area, &o) as f64);
+                    x >= ws.view - 0.5 && x + w <= ws.view + room + 0.5
+                };
+                if !ws.cols.is_empty() && !whole(ws, ws.active) {
+                    let mid = ws.view + room / 2.0;
+                    let near = (0..ws.cols.len()).min_by(|a, b| {
+                        let d = |i: usize| (ws.col_x(i, &area, &o) as f64 + ws.col_width(i, &area, &o) as f64 / 2.0 - mid).abs();
+                        d(*a).total_cmp(&d(*b))
+                    });
+                    ws.active = near.unwrap_or(ws.active);
+                    ws.float_focus = None;
+                    if ws.fullscreen.is_some() {
+                        ws.fullscreen = None;
+                    }
+                }
+            }
+            Some(false) => m.active = (m.pos.round() as usize).min(m.wss.len() - 1),
+            None => {}
+        }
+        self.settle();
+    }
+
     // ---- keeping it tidy ----
 
     /// After any change: an empty workspace last and nowhere else (but the one in view), and
@@ -1054,7 +1335,7 @@ impl Layout {
             let mut i = 0;
             while i + 1 < self.mons[mi].wss.len() {
                 let m = &mut self.mons[mi];
-                if m.wss[i].is_empty() && i != m.active {
+                if m.wss[i].is_empty() && m.wss[i].name.is_none() && i != m.active {
                     m.wss.remove(i);
                     if m.active > i {
                         m.active -= 1;
@@ -1064,14 +1345,14 @@ impl Layout {
                     i += 1;
                 }
             }
-            if self.mons[mi].wss.last().is_none_or(|w| !w.is_empty()) {
+            if self.mons[mi].wss.last().is_none_or(|w| !w.is_empty() || w.name.is_some()) {
                 let ws = self.new_ws();
                 self.mons[mi].wss.push(ws);
             }
             let m = &mut self.mons[mi];
             m.active = m.active.min(m.wss.len() - 1);
             if !m.orphan {
-                for ws in m.wss.iter_mut().filter(|w| w.is_empty() || w.home.is_empty()) {
+                for ws in m.wss.iter_mut().filter(|w| (w.is_empty() && w.name.is_none()) || w.home.is_empty()) {
                     ws.home.clone_from(&m.name);
                 }
             }
@@ -1148,13 +1429,17 @@ impl Layout {
                 moving = true;
             }
         };
-        for m in &mut self.mons {
+        // Under the fingers, the workspaces are where the fingers put them.
+        let held = self.swipe.is_some_and(|s| s.along == Some(false)).then_some(self.active_mon);
+        for (mi, m) in self.mons.iter_mut().enumerate() {
             // Workspaces slide by whole screens, so ease in screen heights (widths, where
             // the windows scroll up and down and the workspaces go sideways).
             let h = if m.vertical(&self.opts) { m.size.0 } else { m.size.1 }.max(1) as f64;
-            let mut p = m.pos * h;
-            ease(&mut p, m.active as f64 * h);
-            m.pos = p / h;
+            if held != Some(mi) {
+                let mut p = m.pos * h;
+                ease(&mut p, m.active as f64 * h);
+                m.pos = p / h;
+            }
             for ws in &mut m.wss {
                 ease(&mut ws.view, ws.view_to);
             }
@@ -1559,33 +1844,33 @@ mod tests {
         let mut l = layout();
         l.add_window(1, false, None);
         l.add_window(2, false, None);
-        l.move_to_scratchpad();
+        l.move_to_scratchpad(None);
         assert_eq!((l.find(2), l.active_window(), l.scratch.clone()), (None, Some(1), vec![2]));
         // Shown: floating, focused, at the scratchpad's size.
-        assert_eq!(l.toggle_scratchpad(), Some(2));
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Shown(2));
         assert_eq!((l.is_floating(2), l.active_window(), l.float_size(2)), (true, Some(2), Some((700, 420))));
         assert_eq!(l.float_size(1), None);
         // And away again, with the focus back where it was.
-        assert_eq!(l.toggle_scratchpad(), None);
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Hidden);
         assert_eq!((l.find(2), l.active_window()), (None, Some(1)));
         // On show on one workspace, asked for on another: it comes over.
-        l.toggle_scratchpad();
+        l.toggle_scratchpad(None);
         l.focus_workspace_by(1);
-        assert_eq!(l.toggle_scratchpad(), Some(2));
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Shown(2));
         assert_eq!(l.find(2), Some((0, 1)));
         // Two put away take turns.
-        l.toggle_scratchpad();
+        l.toggle_scratchpad(None);
         l.focus_workspace_by(-1);
-        l.move_to_scratchpad();
+        l.move_to_scratchpad(None);
         assert_eq!(l.scratch, vec![2, 1]);
-        assert_eq!(l.toggle_scratchpad(), Some(2));
-        l.toggle_scratchpad();
-        assert_eq!(l.toggle_scratchpad(), Some(1));
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Shown(2));
+        l.toggle_scratchpad(None);
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Shown(1));
         // Put into a column, it is an ordinary window again; closed, it is forgotten.
         l.toggle_floating(1);
-        assert_eq!((l.toggle_scratchpad(), l.is_floating(1)), (Some(2), false));
+        assert_eq!((l.toggle_scratchpad(None), l.is_floating(1)), (Scratch::Shown(2), false));
         l.remove_window(2);
-        assert_eq!(l.toggle_scratchpad(), None);
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Empty);
         assert!(l.scratch.is_empty());
     }
 
@@ -1708,6 +1993,115 @@ mod tests {
         l.consume_or_expel(Dir::Right);
         assert_eq!(l.position(1), Some((2, 1)));
         assert_eq!(l.position(2), Some((1, 1)));
+    }
+
+    fn names(l: &Layout, mon: usize) -> Vec<Option<&str>> {
+        l.mons[mon].wss.iter().map(|w| w.name.as_deref()).collect()
+    }
+
+    #[test]
+    fn named_workspaces_stay_and_are_found_by_name() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.set_named_workspaces(&[("chat".into(), None, Some(Scroll::Vertical)), ("mail".into(), Some("B".into()), None)]);
+        // First in the stack, in the settings' order; what was in view still is.
+        assert_eq!(names(&l, 0), vec![Some("chat"), Some("mail"), None, None]);
+        assert_eq!((l.mons[0].active, l.active_window()), (2, Some(1)));
+        // Empty, and it stays; and it scrolls as its line says.
+        l.focus_workspace_ref(&WorkspaceRef::Name("chat".into()));
+        assert_eq!((l.mons[0].active, l.vertical()), (0, true));
+        l.focus_workspace(2);
+        l.move_to_workspace_ref(&WorkspaceRef::Name("mail".into()), true);
+        assert_eq!((l.mons[0].active, l.active_window()), (1, Some(1)));
+        assert_eq!(names(&l, 0), vec![Some("chat"), Some("mail"), None]);
+        // Its display arrives: it goes there with what is on it, and can be gone to by name.
+        l.add_monitor("B", (800, 600));
+        l.set_named_workspaces(&[("chat".into(), None, None), ("mail".into(), Some("B".into()), None)]);
+        assert_eq!((names(&l, 0), names(&l, 1)), (vec![Some("chat"), None], vec![Some("mail"), None]));
+        l.active_mon = 0;
+        l.focus_workspace_ref(&WorkspaceRef::Name("mail".into()));
+        assert_eq!((l.active_mon, l.active_window()), (1, Some(1)));
+        // Its line goes: it is a workspace like any other, and goes when it is empty.
+        l.set_named_workspaces(&[("mail".into(), Some("B".into()), None)]);
+        assert_eq!(names(&l, 0), vec![None]);
+    }
+
+    #[test]
+    fn a_window_opens_where_and_how_it_is_told() {
+        let mut l = layout();
+        l.set_named_workspaces(&[("chat".into(), None, None)]);
+        l.focus_workspace(1);
+        l.add_window(1, false, None);
+        // On another workspace without the focus: nothing in view changes.
+        let chat = WorkspaceRef::Name("chat".into());
+        l.open_window(2, Open { workspace: Some(&chat), focus: false, width: Some(0.25), ..Default::default() });
+        assert_eq!((l.mons[0].active, l.active_window(), l.find(2)), (1, Some(1), Some((0, 0))));
+        assert_eq!(l.mons[0].wss[0].cols[0].width, 0.25);
+        // Beside the focused window without taking the focus from it.
+        l.open_window(3, Open { focus: false, ..Default::default() });
+        assert_eq!((l.active_window(), l.position(3)), (Some(1), Some((2, 1))));
+        // And with the focus, the workspace it names comes into view.
+        l.open_window(4, Open { workspace: Some(&chat), floating: true, ..Default::default() });
+        assert_eq!((l.mons[0].active, l.active_window(), l.is_floating(4)), (0, Some(4), true));
+    }
+
+    #[test]
+    fn each_scratchpad_has_its_own_windows() {
+        let mut l = layout();
+        l.set_scratchpad_sizes([("term".to_string(), 0.5)].into_iter().collect());
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.move_to_scratchpad(Some("term"));
+        // A window that opens put away.
+        l.put_away(3, Some("notes"));
+        assert_eq!(l.toggle_scratchpad(None), Scratch::Empty);
+        assert_eq!(l.toggle_scratchpad(Some("notes")), Scratch::Shown(3));
+        assert_eq!(l.toggle_scratchpad(Some("term")), Scratch::Shown(2));
+        assert_eq!((l.float_size(2), l.float_size(3)), (Some((500, 300)), Some((700, 420))));
+        // One key puts its own away and leaves the other's on show.
+        assert_eq!(l.toggle_scratchpad(Some("notes")), Scratch::Hidden);
+        assert_eq!((l.scratchpad_in_view(Some("term")), l.scratchpad_in_view(Some("notes"))), (vec![2], vec![]));
+        assert_eq!(l.toggle_scratchpad(Some("missing")), Scratch::Empty);
+    }
+
+    #[test]
+    fn fingers_scroll_the_strip_and_the_workspaces() {
+        let mut l = layout();
+        for id in 1..=4 {
+            l.add_window(id, false, None);
+        }
+        l.focus_column_edge(false);
+        l.finish_animations();
+        assert_eq!((l.active_window(), l.mons[0].wss[0].view), (Some(1), 0.0));
+        // Fingers to the left: the strip follows, and the nearest column takes the focus.
+        l.swipe_begin();
+        l.swipe_update(-30.0, 2.0);
+        l.swipe_update(-900.0, 0.0);
+        assert_eq!(l.mons[0].wss[0].view, 930.0);
+        assert!(!l.advance(0.016) || l.mons[0].wss[0].view == 930.0);
+        l.swipe_end();
+        assert_eq!(l.active_window(), Some(3));
+        // It can't be pulled past the end, and a column still whole in view keeps the focus.
+        l.swipe_begin();
+        l.swipe_update(-9000.0, 0.0);
+        let end = l.mons[0].wss[0].view;
+        l.swipe_end();
+        assert_eq!((l.active_window(), end), (Some(3), 990.0));
+        // Fingers up: the workspace below comes with them, and stays when let go past half.
+        l.finish_animations();
+        l.swipe_begin();
+        l.swipe_update(0.0, -400.0);
+        assert!((l.mons[0].pos - 400.0 / 600.0).abs() < 1e-9);
+        l.advance(0.5);
+        assert!((l.mons[0].pos - 400.0 / 600.0).abs() < 1e-9);
+        l.swipe_end();
+        assert_eq!(l.mons[0].active, 1);
+        // Not far enough: back where it was.
+        l.finish_animations();
+        l.swipe_begin();
+        l.swipe_update(0.0, 200.0);
+        l.swipe_end();
+        assert_eq!(l.mons[0].active, 1);
     }
 
     #[test]

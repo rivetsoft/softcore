@@ -3,6 +3,7 @@
 mod backend;
 mod blur;
 mod capture;
+mod chord;
 mod cast;
 mod config;
 mod cursor;

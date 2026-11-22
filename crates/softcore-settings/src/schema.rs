@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::{Bind, Scroll, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_combo, parse_output};
+use crate::{Bind, LayerRule, ScratchpadRule, WindowRule, WorkspaceRule, Scroll, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_output};
 
 /// The page of a settings window a key belongs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +107,8 @@ pub const SETTINGS: &[Setting] = &[
     s("animations", Group::Motion, "Animations", "Windows fade in and out and slide to their places. Off: everything is where it belongs at once.", Kind::Bool, "true"),
     s("animation_speed", Group::Motion, "Animation speed", "1 is usual, 2 twice as fast.", Kind::Float { min: 0.25, max: 4.0, step: 0.25 }, "1"),
     s("mod", Group::Keyboard, "The Mod key", "auto: Super on displays of its own, Alt in a window of another desktop.", Kind::Choice(&["auto", "super", "alt"]), "auto"),
+    s("chord_panel", Group::Keyboard, "Show what can follow a chord's first keys", "A binding of several keys, one after another (bind.Mod+G,T=…), opens a list of what the next key can be. Off: the keys work the same with nothing shown.", Kind::Bool, "true"),
+    s("chord_vim", Group::Keyboard, "H, J, K and L go about a chord's list", "Down, up, back a step and on, as in Vim, beside the arrow keys. A step of the chord on one of those letters still wins.", Kind::Bool, "false"),
     s("default_binds", Group::Keyboard, "Softcore's own key bindings", "Off: only the bindings in this file.", Kind::Bool, "true"),
     s("xkb_layout", Group::Keyboard, "Layout", "As xkb names it: us, de, us,ru. Empty: the system's.", Kind::Text, ""),
     s("xkb_variant", Group::Keyboard, "Layout variant", "As xkb names it: dvorak, colemak.", Kind::Text, ""),
@@ -214,6 +216,16 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     pub binds: Vec<Bind>,
     pub outputs: Vec<OutputRule>,
+    /// How particular windows, workspaces, scratchpads and shell surfaces are treated, in
+    /// the order their lines stand.
+    /// What the keys that begin a chord are called in its panel: `chord.Mod+G=Go to`.
+    pub chords: Vec<(Vec<(crate::Mods, String)>, String)>,
+    pub chord_panel: bool,
+    pub chord_vim: bool,
+    pub rules: Vec<WindowRule>,
+    pub workspaces: Vec<WorkspaceRule>,
+    pub scratchpads: Vec<ScratchpadRule>,
+    pub layers: Vec<LayerRule>,
     /// Lines that couldn't be used, for the panel that says so.
     pub errors: Vec<String>,
     /// Every file read, and when each was last changed.
@@ -266,6 +278,13 @@ impl Default for Config {
             env: Vec::new(),
             binds: Vec::new(),
             outputs: Vec::new(),
+            chords: Vec::new(),
+            chord_panel: true,
+            chord_vim: false,
+            rules: Vec::new(),
+            workspaces: Vec::new(),
+            scratchpads: Vec::new(),
+            layers: Vec::new(),
             errors: Vec::new(),
             files: Vec::new(),
             values: BTreeMap::new(),
@@ -309,6 +328,33 @@ impl Config {
         self.files.iter().any(|(p, t)| mtime(p) != *t)
     }
 
+    /// What the lines that fit a window give it between them, later lines over earlier.
+    pub fn window_rule(&self, app_id: &str, title: &str) -> WindowRule {
+        let mut out = WindowRule::default();
+        for r in self.rules.iter().filter(|r| r.matches.fits(app_id, title)) {
+            out.take(r);
+        }
+        // A scratchpad's own line says which windows are its.
+        if let Some(s) = self.scratchpads.iter().rev().find(|s| !s.matches.is_empty() && s.matches.fits(app_id, title)) {
+            out.scratchpad = Some(s.name.clone());
+        }
+        out
+    }
+
+    /// What the lines that fit a shell surface's name give it between them.
+    pub fn layer_rule(&self, namespace: &str) -> LayerRule {
+        let mut out = LayerRule { namespace: namespace.to_string(), ..Default::default() };
+        if self.blur_layers.iter().any(|n| n == namespace) {
+            out.blur = Some(true);
+        }
+        for r in self.layers.iter().filter(|r| crate::rules::glob(&r.namespace, namespace)) {
+            out.opacity = r.opacity.or(out.opacity);
+            out.blur = r.blur.or(out.blur);
+            out.shadow = r.shadow.or(out.shadow);
+        }
+        out
+    }
+
     /// A plain setting as it would be written: what a window shows for it.
     pub fn value(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
@@ -350,8 +396,7 @@ impl Config {
             return self.set_plain(s, v);
         }
         if let Some(combo) = key.strip_prefix("bind.") {
-            let (mods, k) = parse_combo(combo)?;
-            let id = mods.combo(&k);
+            let id = crate::keys_id(&crate::parse_keys(combo)?);
             let bind = if v.is_empty() { None } else { Some(parse_bind(combo, v).map_err(|e| format!("{key}={v}: {e}"))?) };
             self.user_binds.retain(|(i, _)| *i != id);
             self.user_binds.push((id, bind));
@@ -359,6 +404,26 @@ impl Config {
             let r = parse_output(name, v)?;
             self.outputs.retain(|o| o.name != r.name);
             self.outputs.push(r);
+        } else if let Some(keys) = key.strip_prefix("chord.") {
+            let keys = crate::parse_keys(keys)?;
+            self.chords.retain(|(k, _)| *k != keys);
+            self.chords.push((keys, v.to_string()));
+        } else if let Some(name) = key.strip_prefix("rule.") {
+            let r = crate::rules::parse_window_rule(name, v)?;
+            self.rules.retain(|o| o.name != r.name);
+            self.rules.push(r);
+        } else if let Some(name) = key.strip_prefix("workspace.") {
+            let r = crate::rules::parse_workspace_rule(name, v)?;
+            self.workspaces.retain(|o| o.name != r.name);
+            self.workspaces.push(r);
+        } else if let Some(name) = key.strip_prefix("scratchpad.") {
+            let r = crate::rules::parse_scratchpad_rule(name, v)?;
+            self.scratchpads.retain(|o| o.name != r.name);
+            self.scratchpads.push(r);
+        } else if let Some(name) = key.strip_prefix("layer.") {
+            let r = crate::rules::parse_layer_rule(name, v)?;
+            self.layers.retain(|o| o.namespace != r.namespace);
+            self.layers.push(r);
         } else if let Some(name) = key.strip_prefix("env.") {
             self.env.retain(|(k, _)| k != name);
             self.env.push((name.to_string(), v.to_string()));
@@ -423,6 +488,8 @@ impl Config {
                 }
             }
             "default_binds" => self.default_binds = boolean(),
+            "chord_panel" => self.chord_panel = boolean(),
+            "chord_vim" => self.chord_vim = boolean(),
             "xkb_layout" => self.xkb_layout = v.to_string(),
             "xkb_variant" => self.xkb_variant = v.to_string(),
             "xkb_options" => self.xkb_options = v.to_string(),
@@ -450,7 +517,7 @@ impl Config {
             }
         }
         for (id, bind) in &self.user_binds {
-            self.binds.retain(|b| b.mods.combo(&b.key) != *id);
+            self.binds.retain(|b| crate::keys_id(&b.keys()) != *id);
             self.binds.extend(bind.clone());
         }
     }

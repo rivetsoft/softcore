@@ -12,9 +12,11 @@
 //! window reads and writes with it.
 
 mod file;
+mod rules;
 mod schema;
 
 pub use file::SettingsFile;
+pub use rules::{LayerRule, Match, ScratchpadRule, WindowRule, WorkspaceRef, WorkspaceRule, glob};
 pub use schema::{Config, Group, Kind, SETTINGS, Setting, check, config_file, setting};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,12 +114,13 @@ pub enum Action {
     WindowedFullscreen,
     CenterColumn,
     ToggleFloating,
-    MoveToScratchpad,
-    ToggleScratchpad,
+    /// None: the scratchpad without a name.
+    MoveToScratchpad(Option<String>),
+    ToggleScratchpad(Option<String>),
     SwitchFloatingFocus,
-    FocusWorkspace(usize),
+    FocusWorkspace(WorkspaceRef),
     FocusWorkspaceBy(i32),
-    MoveToWorkspace { idx: usize, column: bool },
+    MoveToWorkspace { to: WorkspaceRef, column: bool },
     MoveToWorkspaceBy { by: i32, column: bool },
     FocusMonitor(i32),
     MoveColumnToMonitor(i32),
@@ -145,6 +148,8 @@ impl Action {
         let text = text.trim();
         let (name, rest) = text.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((text, ""));
         let num = |what: &str| rest.parse::<usize>().ok().filter(|n| *n >= 1).ok_or(format!("{name} needs {what}"));
+        let ws = || WorkspaceRef::parse(rest).ok_or(format!("{name} needs a workspace's number or name"));
+        let named = || (!rest.is_empty()).then(|| rest.to_string());
         Ok(match name {
             "spawn" | "spawn-sh" if !rest.is_empty() => Action::Spawn(rest.to_string()),
             "spawn" | "spawn-sh" => return Err("spawn needs a command".into()),
@@ -177,14 +182,14 @@ impl Action {
             "toggle-windowed-fullscreen" => Action::WindowedFullscreen,
             "center-column" => Action::CenterColumn,
             "toggle-window-floating" => Action::ToggleFloating,
-            "move-window-to-scratchpad" => Action::MoveToScratchpad,
-            "toggle-scratchpad" => Action::ToggleScratchpad,
+            "move-window-to-scratchpad" => Action::MoveToScratchpad(named()),
+            "toggle-scratchpad" => Action::ToggleScratchpad(named()),
             "switch-focus-between-floating-and-tiling" => Action::SwitchFloatingFocus,
-            "focus-workspace" => Action::FocusWorkspace(num("a workspace number")? - 1),
+            "focus-workspace" => Action::FocusWorkspace(ws()?),
             "focus-workspace-down" => Action::FocusWorkspaceBy(1),
             "focus-workspace-up" => Action::FocusWorkspaceBy(-1),
-            "move-column-to-workspace" => Action::MoveToWorkspace { idx: num("a workspace number")? - 1, column: true },
-            "move-window-to-workspace" => Action::MoveToWorkspace { idx: num("a workspace number")? - 1, column: false },
+            "move-column-to-workspace" => Action::MoveToWorkspace { to: ws()?, column: true },
+            "move-window-to-workspace" => Action::MoveToWorkspace { to: ws()?, column: false },
             "move-column-to-workspace-down" => Action::MoveToWorkspaceBy { by: 1, column: true },
             "move-column-to-workspace-up" => Action::MoveToWorkspaceBy { by: -1, column: true },
             "move-window-to-workspace-down" => Action::MoveToWorkspaceBy { by: 1, column: false },
@@ -237,12 +242,14 @@ impl Action {
             Action::WindowedFullscreen => "Full screen as the program sees it, in its place".into(),
             Action::CenterColumn => "Centre the column".into(),
             Action::ToggleFloating => "Float the window, or put it back".into(),
-            Action::MoveToScratchpad => "Put the window away in the scratchpad".into(),
-            Action::ToggleScratchpad => "Show the scratchpad, or put it away".into(),
+            Action::MoveToScratchpad(None) => "Put the window away in the scratchpad".into(),
+            Action::MoveToScratchpad(Some(n)) => format!("Put the window away in the {n} scratchpad"),
+            Action::ToggleScratchpad(None) => "Show the scratchpad, or put it away".into(),
+            Action::ToggleScratchpad(Some(n)) => format!("Show the {n} scratchpad, or put it away"),
             Action::SwitchFloatingFocus => "Between floating windows and columns".into(),
-            Action::FocusWorkspace(n) => format!("Workspace {}", n + 1),
+            Action::FocusWorkspace(w) => format!("Workspace {}", w.label()),
             Action::FocusWorkspaceBy(b) => format!("Workspace {}", if *b > 0 { "below" } else { "above" }),
-            Action::MoveToWorkspace { idx, .. } => format!("Move to workspace {}", idx + 1),
+            Action::MoveToWorkspace { to, .. } => format!("Move to workspace {}", to.label()),
             Action::MoveToWorkspaceBy { by, .. } => format!("Move to the workspace {}", if *by > 0 { "below" } else { "above" }),
             Action::FocusMonitor(b) => format!("{} display", if *b > 0 { "Next" } else { "Previous" }),
             Action::MoveColumnToMonitor(b) => format!("Move to the {} display", if *b > 0 { "next" } else { "previous" }),
@@ -299,6 +306,26 @@ pub struct Bind {
     /// What the keys panel says it does, in place of the action's own words. Empty: left
     /// out of the panel.
     pub title: Option<String>,
+    /// The keys pressed after the first, one at a time, for a chord: `Mod+G,T` is Mod+G and
+    /// then T. Empty for a plain binding.
+    pub then: Vec<(Mods, String)>,
+}
+
+/// `Mod+G,T,2` into its keys, in the order they are pressed.
+pub fn parse_keys(text: &str) -> Result<Vec<(Mods, String)>, String> {
+    text.split(',').map(parse_combo).collect()
+}
+
+/// The one spelling of a run of keys.
+pub fn keys_id(keys: &[(Mods, String)]) -> String {
+    keys.iter().map(|(m, k)| m.combo(k)).collect::<Vec<_>>().join(",")
+}
+
+impl Bind {
+    /// Every key of the binding, the first included.
+    pub fn keys(&self) -> Vec<(Mods, String)> {
+        std::iter::once((self.mods, self.key.clone())).chain(self.then.iter().cloned()).collect()
+    }
 }
 
 /// `Mod+Shift+Q` into its parts.
@@ -321,7 +348,8 @@ pub fn parse_combo(text: &str) -> Result<(Mods, String), String> {
 
 /// A binding from its keys and what follows them.
 pub fn parse_bind(combo: &str, action: &str) -> Result<Bind, String> {
-    let (mods, key) = parse_combo(combo)?;
+    let mut keys = parse_keys(combo)?;
+    let (mods, key) = keys.remove(0);
     let mut action = action.trim();
     let mut locked = false;
     let mut title = None;
@@ -338,7 +366,7 @@ pub fn parse_bind(combo: &str, action: &str) -> Result<Bind, String> {
             break;
         }
     }
-    Ok(Bind { mods, key, shown: combo.to_string(), action: Action::parse(action)?, locked, title })
+    Ok(Bind { mods, key, shown: combo.split(',').map(str::trim).collect::<Vec<_>>().join(", "), action: Action::parse(action)?, locked, title, then: keys })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,8 +601,32 @@ mod tests {
     }
 
     #[test]
+    fn rules_chords_and_names_are_keyed() {
+        let c = Config::from_text("rule.a=app-id=mpv floating opacity=0.5\nrule.b=title=*film* opacity=1\nrule.a=app-id=mpv tiled\nworkspace.chat=scroll=vertical\nscratchpad.term=app-id=scratch command=foot\nlayer.rivet-*=opacity=0.8\nblur_layers=rivet-panel\nbind.Mod+G,T=spawn foot\nbind.mod+g, shift+w=title=\"Web\" spawn firefox\nchord.Mod+G=Go to\nrule.bad=sideways\n");
+        assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
+        // A line written again replaces the first, and later lines lie over earlier ones.
+        let r = c.window_rule("mpv", "a film");
+        assert_eq!((c.rules.len(), r.floating, r.opacity), (2, Some(false), Some(1.0)));
+        assert_eq!(c.window_rule("scratch", "").scratchpad.as_deref(), Some("term"));
+        assert_eq!(c.window_rule("foot", ""), WindowRule::default());
+        assert_eq!((c.workspaces[0].name.as_str(), c.workspaces[0].scroll), ("chat", Some(Scroll::Vertical)));
+        let l = c.layer_rule("rivet-panel");
+        assert_eq!((l.opacity, l.blur, c.layer_rule("other").opacity), (Some(0.8), Some(true), None));
+        // A chord is its first keys and the ones after.
+        let chords: Vec<&Bind> = c.binds.iter().filter(|b| !b.then.is_empty()).collect();
+        assert_eq!(chords.len(), 2);
+        assert_eq!((chords[0].key.as_str(), chords[0].then[0].1.as_str(), chords[0].shown.as_str()), ("g", "t", "Mod+G, T"));
+        assert!(chords[1].then[0].0.shift && chords[1].title.as_deref() == Some("Web"));
+        assert_eq!(c.chords[0].1, "Go to");
+        // The plain binding on the same first keys is still there for whoever wants it.
+        assert!(Config::default().binds.iter().all(|b| b.then.is_empty()));
+    }
+
+    #[test]
     fn actions_parse() {
-        assert_eq!(Action::parse("focus-workspace 3"), Ok(Action::FocusWorkspace(2)));
+        assert_eq!(Action::parse("focus-workspace 3"), Ok(Action::FocusWorkspace(WorkspaceRef::Index(2))));
+        assert_eq!(Action::parse("move-column-to-workspace chat"), Ok(Action::MoveToWorkspace { to: WorkspaceRef::Name("chat".into()), column: true }));
+        assert_eq!(Action::parse("toggle-scratchpad term"), Ok(Action::ToggleScratchpad(Some("term".into()))));
         assert_eq!(Action::parse("set-column-width -10%"), Ok(Action::SetColumnWidth(WidthChange::By(-0.1))));
         assert_eq!(Action::parse("quit --skip-confirmation"), Ok(Action::Quit { confirm: false }));
         assert!(Action::parse("focus-workspace").is_err());

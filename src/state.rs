@@ -90,6 +90,8 @@ pub struct Win {
     pub before: Option<(smithay::backend::renderer::gles::GlesTexture, smithay::backend::renderer::element::Id)>,
     /// When it last had the focus, for `softcore msg windows`.
     pub focused_at: Duration,
+    /// What the settings' lines for windows like it give it.
+    pub rule: crate::config::WindowRule,
 }
 
 #[derive(Default)]
@@ -109,6 +111,11 @@ pub struct State {
     /// The X11 display kept for xwayland-satellite, if there is one.
     pub x11: Option<crate::xwayland::X11>,
     pub workspaces: crate::workspaces::Workspaces,
+    /// A named scratchpad that was asked for while empty: its program has been started, and
+    /// its window is shown as soon as it opens.
+    pub scratch_wanted: Option<String>,
+    /// The keys of a chord pressed so far, and which of what can follow is picked out.
+    pub chord: Option<crate::chord::Chord>,
 
     pub config: Config,
     pub layout: Layout,
@@ -254,6 +261,8 @@ impl State {
             nested,
             x11: None,
             workspaces: Default::default(),
+            scratch_wanted: None,
+            chord: None,
             layout,
             wins: HashMap::new(),
             unmapped: Vec::new(),
@@ -362,6 +371,7 @@ impl State {
         let size = Self::output_size(&output);
         self.layout.add_monitor(&output.name(), (size.w, size.h));
         self.layout.set_scroll(&output.name(), rule.as_ref().and_then(|r| r.scroll));
+        self.apply_names();
         if self.outputs.is_empty() {
             self.pointer_pos = (loc.0 as f64 + size.w as f64 / 2.0, loc.1 as f64 + size.h as f64 / 2.0).into();
         }
@@ -389,6 +399,13 @@ impl State {
         }
         self.update_areas();
         self.queue_redraw();
+    }
+
+    /// Give the layout the workspaces and scratchpads the settings name.
+    pub fn apply_names(&mut self) {
+        let wanted: Vec<_> = self.config.workspaces.iter().map(|w| (w.name.clone(), w.output.clone(), w.scroll)).collect();
+        self.layout.set_named_workspaces(&wanted);
+        self.layout.set_scratchpad_sizes(self.config.scratchpads.iter().filter_map(|s| s.size.map(|z| (s.name.clone(), z))).collect());
     }
 
     pub fn output_named(&self, name: &str) -> Option<&Output> {
@@ -453,7 +470,8 @@ impl State {
         self.next_win += 1;
         let (title, app_id) = Self::title_and_app_id(&window);
         let foreign = self.foreign_toplevel_state.new_toplevel::<State>(&title, &app_id);
-        let floating = Self::wants_floating(&window);
+        let rule = self.config.window_rule(&app_id, &title);
+        let floating = rule.floating.unwrap_or_else(|| Self::wants_floating(&window));
         if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone())
             && with_states(&surface, |s| s.data_map.insert_if_missing(|| Watched))
         {
@@ -472,9 +490,25 @@ impl State {
                 }
             });
         }
-        self.wins.insert(id, Win { window, foreign, output: None, windowed: false, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed() });
-        self.layout.add_window(id, floating, None);
-        self.layer_focus = None;
+        self.wins.insert(id, Win { window, foreign, output: None, windowed: false, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed(), rule: rule.clone() });
+        if let Some(name) = &rule.scratchpad {
+            // Put away as it opens; shown at once when it is what the scratchpad key is
+            // waiting for.
+            self.layout.put_away(id, Some(name));
+            if self.scratch_wanted.as_deref() == Some(name.as_str()) {
+                self.scratch_wanted = None;
+                self.layout.toggle_scratchpad(Some(name));
+            }
+        } else {
+            let open = crate::layout::Open { floating, output: rule.output.as_deref(), workspace: rule.workspace.as_ref(), width: rule.width, maximized: rule.maximized == Some(true), focus: rule.focus != Some(false) };
+            self.layout.open_window(id, open);
+            if rule.fullscreen == Some(true) {
+                self.layout.set_fullscreen(id, Some(true));
+            }
+        }
+        if rule.focus != Some(false) {
+            self.layer_focus = None;
+        }
         self.queue_redraw();
     }
 
@@ -705,6 +739,12 @@ impl State {
         let new = crate::config::load();
         let old = std::mem::replace(&mut self.config, new);
         self.layout.set_options(self.config.layout.clone());
+        self.apply_names();
+        self.chord = None;
+        for w in self.wins.values_mut() {
+            let (title, app_id) = Self::title_and_app_id(&w.window);
+            w.rule = self.config.window_rule(&app_id, &title);
+        }
         if let Some(k) = self.seat.get_keyboard() {
             if (&old.xkb_layout, &old.xkb_variant, &old.xkb_options) != (&self.config.xkb_layout, &self.config.xkb_variant, &self.config.xkb_options) {
                 let c = self.config.clone();
@@ -836,28 +876,47 @@ impl State {
                 }
             }
             // Put away, a window fades out as one that closed does; shown, it fades in.
-            Action::MoveToScratchpad => {
+            Action::MoveToScratchpad(name) => {
                 if let Some(id) = active {
                     crate::render::start_closing(self, id);
-                    self.layout.move_to_scratchpad();
+                    self.layout.move_to_scratchpad(name.as_deref());
                 }
             }
-            Action::ToggleScratchpad => {
-                for id in self.layout.scratchpad_in_view() {
+            Action::ToggleScratchpad(name) => {
+                for id in self.layout.scratchpad_in_view(name.as_deref()) {
                     crate::render::start_closing(self, id);
                 }
-                if let Some(id) = self.layout.toggle_scratchpad()
-                    && self.config.animations
-                    && let Some(w) = self.wins.get_mut(&id)
-                {
-                    w.shown = 0.0;
+                match self.layout.toggle_scratchpad(name.as_deref()) {
+                    crate::layout::Scratch::Shown(id) => {
+                        if self.config.animations
+                            && let Some(w) = self.wins.get_mut(&id)
+                        {
+                            w.shown = 0.0;
+                        }
+                    }
+                    // A named scratchpad with nothing in it starts its program, and shows
+                    // the window when it comes.
+                    crate::layout::Scratch::Empty => {
+                        let command = name.as_ref().and_then(|n| self.config.scratchpads.iter().find(|s| s.name == *n)).and_then(|s| s.command.clone());
+                        if let Some(c) = command {
+                            self.scratch_wanted = name;
+                            self.spawn(&c);
+                        }
+                    }
+                    crate::layout::Scratch::Hidden => {}
                 }
             }
             Action::ToggleShortcutsInhibit => self.all_keys = if self.all_keys.is_some() && self.all_keys == active { None } else { active },
             Action::SwitchFloatingFocus => self.layout.switch_floating_focus(),
-            Action::FocusWorkspace(i) => self.layout.focus_workspace(i),
+            Action::FocusWorkspace(w) => {
+                let was = self.layout.active_mon;
+                self.layout.focus_workspace_ref(&w);
+                if self.layout.active_mon != was {
+                    self.warp_pointer_to_active_output();
+                }
+            }
             Action::FocusWorkspaceBy(b) => self.layout.focus_workspace_by(b),
-            Action::MoveToWorkspace { idx, column } => self.layout.move_to_workspace(idx, column),
+            Action::MoveToWorkspace { to, column } => self.layout.move_to_workspace_ref(&to, column),
             Action::MoveToWorkspaceBy { by, column } => self.layout.move_to_workspace_by(by, column),
             Action::FocusMonitor(b) => {
                 if self.layout.focus_monitor(b) {

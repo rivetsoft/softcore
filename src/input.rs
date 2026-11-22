@@ -49,7 +49,12 @@ impl State {
         let locked = self.lock.locked;
         // A window given every key gets Softcore's bindings too, all but the way back.
         let all = !locked && self.all_keys.is_some() && self.all_keys == self.layout.active_window() && self.layer_focus.is_none();
-        let found = self.config.binds.iter().find(|b| (!locked || b.locked) && (!all || b.action == Action::ToggleShortcutsInhibit) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
+        if locked || all {
+            self.end_chord();
+        } else if let crate::chord::Outcome::Taken(action) = self.chord_key([mods.ctrl, mods.shift, mods.alt, mods.logo], sym) {
+            return Some(action);
+        }
+        let found = self.config.binds.iter().find(|b| b.then.is_empty() && (!locked || b.locked) && (!all || b.action == Action::ToggleShortcutsInhibit) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
         if found.is_none() && self.overview.on && !locked {
             // The overview has the keyboard: arrows go about it, Return and Escape leave it,
             // and nothing is typed into the window it will leave on.
@@ -199,6 +204,7 @@ impl State {
 
     /// A click gives the keyboard to what was clicked: a window, or a panel that takes keys.
     fn clicked(&mut self, pos: Point<f64, Logical>) {
+        self.end_chord();
         if self.ui.panel == Panel::Share {
             if let Some(i) = crate::picker::item_at(self, pos) {
                 crate::picker::finish(self, Some(i));
@@ -293,7 +299,7 @@ mod tests {
         // Shift held: a different binding, and the key is still "f", not "F".
         assert_eq!(find(false, (false, true, false, true), Keysym::f), Some(Action::FullscreenWindow));
         assert_eq!(find(false, (false, false, false, true), Keysym::f), Some(Action::MaximizeColumn));
-        assert_eq!(find(false, (true, false, false, true), Keysym::_3), Some(Action::MoveToWorkspace { idx: 2, column: true }));
+        assert_eq!(find(false, (true, false, false, true), Keysym::_3), Some(Action::MoveToWorkspace { to: crate::config::WorkspaceRef::Index(2), column: true }));
         assert_eq!(find(false, (false, false, false, true), Keysym::bracketleft), Some(Action::ConsumeOrExpel(crate::layout::Dir::Left)));
     }
 }

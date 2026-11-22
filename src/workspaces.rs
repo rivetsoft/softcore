@@ -41,6 +41,7 @@ struct Ws {
     obj: ExtWorkspaceHandleV1,
     group: Option<String>,
     idx: Option<u32>,
+    name: String,
     active: Option<bool>,
 }
 
@@ -122,14 +123,14 @@ pub fn refresh(state: &mut State) {
         return;
     }
     // Each display with its workspaces: id, place in the stack, showing or not.
-    let want: Vec<(String, Option<Output>, Vec<(u64, u32, bool)>)> = state
+    let want: Vec<(String, Option<Output>, Vec<(u64, u32, bool, Option<String>)>)> = state
         .layout
         .mons
         .iter()
         .filter(|m| !m.orphan)
         .map(|m| {
             let output = state.outputs.iter().find(|o| o.name() == m.name).cloned();
-            (m.name.clone(), output, m.wss.iter().enumerate().map(|(wi, ws)| (ws.id, wi as u32, wi == m.active)).collect())
+            (m.name.clone(), output, m.wss.iter().enumerate().map(|(wi, ws)| (ws.id, wi as u32, wi == m.active, ws.name.clone())).collect())
         })
         .collect();
     let dh = state.dh.clone();
@@ -166,17 +167,20 @@ pub fn refresh(state: &mut State) {
         }
 
         for (name, _, wss) in &want {
-            for &(id, idx, active) in wss {
+            for (id, idx, active, called) in wss {
+                let (id, idx, active) = (*id, *idx, *active);
                 if !m.wss.contains_key(&id) {
                     let Ok(obj) = client.create_resource::<ExtWorkspaceHandleV1, _, State>(&dh, version, WsData(id)) else { continue };
                     m.obj.workspace(&obj);
                     obj.capabilities(WorkspaceCapabilities::Activate);
-                    m.wss.insert(id, Ws { obj, group: None, idx: None, active: None });
+                    m.wss.insert(id, Ws { obj, group: None, idx: None, name: String::new(), active: None });
                     changed = true;
                 }
                 let Some(ws) = m.wss.get_mut(&id) else { continue };
-                if ws.idx != Some(idx) {
-                    ws.obj.name((idx + 1).to_string());
+                let called = called.clone().unwrap_or_else(|| (idx + 1).to_string());
+                if ws.idx != Some(idx) || ws.name != called {
+                    ws.obj.name(called.clone());
+                    ws.name = called;
                     ws.obj.coordinates(idx.to_ne_bytes().to_vec());
                     ws.idx = Some(idx);
                     changed = true;

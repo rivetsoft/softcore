@@ -7,7 +7,7 @@ pub use softcore_settings::*;
 /// The settings on disk, with bindings that name no key reported.
 pub fn load() -> Config {
     let mut c = Config::load();
-    let unknown: Vec<String> = c.binds.iter().filter(|b| crate::input::key_sym(&b.key).is_none()).map(|b| format!("bind.{}: there is no key called {:?}", b.shown, b.key)).collect();
+    let unknown: Vec<String> = c.binds.iter().flat_map(|b| b.keys().into_iter().filter(|(_, k)| crate::input::key_sym(k).is_none()).map(move |(_, k)| format!("bind.{}: there is no key called {k:?}", b.shown))).collect();
     c.errors.extend(unknown);
     c
 }

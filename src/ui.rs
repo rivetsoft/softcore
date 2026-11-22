@@ -45,6 +45,8 @@ pub struct Ui {
     look: Option<Look>,
     /// Whether the desktop asked for dark when last looked.
     dark: bool,
+    /// The list of a chord's next keys, as last painted.
+    chord: Option<(crate::chord::View, MemoryRenderBuffer, (i32, i32))>,
 }
 
 fn choice(c: &Config) -> Choice {
@@ -64,7 +66,7 @@ fn rgb(c: Color32) -> [u8; 3] {
 
 impl Ui {
     pub fn new() -> Ui {
-        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark() }
+        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark(), chord: None }
     }
 
     pub fn show(&mut self, panel: Panel) {
@@ -90,6 +92,7 @@ impl Ui {
     }
 
     pub fn settings_changed(&mut self, _c: &Config) {
+        self.chord = None;
         self.look = None;
         self.dirty = true;
     }
@@ -104,6 +107,7 @@ impl Ui {
         }
         self.live = new;
         self.dark = dark;
+        self.chord = None;
         self.look = None;
         self.dirty = true;
         true
@@ -170,16 +174,25 @@ impl Ui {
         Some((buffer, size))
     }
 
+    /// The list of what can follow a chord's keys, painted again only when it changed.
+    pub fn chord_buffer(&mut self, c: &Config, mod_is_alt: bool, screen: (i32, i32), view: &crate::chord::View) -> (MemoryRenderBuffer, (i32, i32)) {
+        let size = ((420).min(screen.0 - 40).max(160), (116 + 32 * view.rows.len().max(1) as i32).min(screen.1 - 40).max(80));
+        if let Some((v, b, s)) = &self.chord
+            && v == view
+            && *s == size
+        {
+            return (b.clone(), *s);
+        }
+        let pixels = self.paint_with(c, size, |ui| chord(ui, view, mod_is_alt));
+        let buffer = MemoryRenderBuffer::from_slice(&pixels, Fourcc::Abgr8888, size, 1, Transform::Normal, None);
+        self.chord = Some((view.clone(), buffer.clone(), size));
+        (buffer, size)
+    }
+
     fn paint(&mut self, c: &Config, mod_is_alt: bool, size: (i32, i32), mut picker: Option<&mut crate::picker::Picker>) -> Vec<u8> {
-        let ch = choice(c);
-        let ctx = self.ctx.clone();
-        let live = &mut self.live;
         let panel = self.panel;
-        let mut out = ctx.run_ui(Self::raw(size), |ui| {
-            live.frame(ui.ctx(), &ch, false);
-            let v = ui.visuals().clone();
-            egui::Frame::new().fill(v.window_fill).stroke(v.window_stroke).corner_radius(theme::r_lg()).inner_margin(20.0).show(ui, |ui| {
-                ui.set_min_size(ui.available_size());
+        self.paint_with(c, size, |ui| {
+            {
                 match panel {
                     Panel::Keys => keys(ui, c, mod_is_alt),
                     Panel::Quit => {
@@ -216,6 +229,24 @@ impl Ui {
                     }
                     Panel::None => {}
                 }
+            }
+        })
+    }
+
+    /// A panel in the Rivet look, as pixels.
+    fn paint_with(&mut self, c: &Config, size: (i32, i32), body: impl FnOnce(&mut egui::Ui)) -> Vec<u8> {
+        let ch = choice(c);
+        let ctx = self.ctx.clone();
+        let live = &mut self.live;
+        let mut body = Some(body);
+        let mut out = ctx.run_ui(Self::raw(size), |ui| {
+            live.frame(ui.ctx(), &ch, false);
+            let v = ui.visuals().clone();
+            egui::Frame::new().fill(v.window_fill).stroke(v.window_stroke).corner_radius(theme::r_lg()).inner_margin(20.0).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                if let Some(body) = body.take() {
+                    body(ui);
+                }
             });
         });
         self.tex.update(&out.textures_delta);
@@ -232,6 +263,42 @@ fn key_cap(ui: &mut egui::Ui, text: &str) {
     let v = ui.visuals().clone();
     egui::Frame::new().fill(v.faint_bg_color).stroke(v.widgets.noninteractive.bg_stroke).corner_radius(theme::r_xs()).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
         ui.label(RichText::new(text).strong());
+    });
+}
+
+/// What can follow a chord's keys: each key and what it does, the picked one marked.
+fn chord(ui: &mut egui::Ui, view: &crate::chord::View, mod_is_alt: bool) {
+    let modname = if mod_is_alt { "Alt" } else { "Super" };
+    ui.heading(view.title.replace("Mod", modname));
+    ui.add_space(8.0);
+    let v = ui.visuals().clone();
+    if view.rows.is_empty() {
+        ui.weak("Nothing follows these keys.");
+    }
+    for (i, (key, label, more)) in view.rows.iter().enumerate() {
+        let chosen = i == view.selected;
+        let frame = egui::Frame::new().fill(if chosen { v.selection.bg_fill.gamma_multiply(0.35) } else { Color32::TRANSPARENT }).corner_radius(theme::r_sm()).inner_margin(egui::Margin::symmetric(6, 2));
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                key_cap(ui, &key.replace("Mod", modname));
+                ui.label(label);
+                if *more {
+                    ui.weak("›");
+                }
+            });
+        });
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        key_cap(ui, if view.vim { "Arrows or J K" } else { "Arrows" });
+        ui.weak("Choose");
+        ui.add_space(10.0);
+        key_cap(ui, "Enter");
+        ui.weak("Take");
+        ui.add_space(10.0);
+        key_cap(ui, "Esc");
+        ui.weak("Leave");
     });
 }
 
@@ -269,11 +336,11 @@ fn key_rows(c: &Config) -> Vec<(String, String)> {
         let digit = b.key.len() == 1 && b.key.chars().all(|ch| ch.is_ascii_digit());
         let mut shown = b.shown.clone();
         let label = match (&b.action, digit) {
-            (Action::FocusWorkspace(0), true) => {
+            (Action::FocusWorkspace(crate::config::WorkspaceRef::Index(0)), true) => {
                 shown = shown.replace('1', "1…9");
                 "Workspace by number".to_string()
             }
-            (Action::MoveToWorkspace { idx: 0, .. }, true) => {
+            (Action::MoveToWorkspace { to: crate::config::WorkspaceRef::Index(0), .. }, true) => {
                 shown = shown.replace('1', "1…9");
                 "Move to a workspace by number".to_string()
             }

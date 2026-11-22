@@ -67,7 +67,10 @@ impl CompositorHandler for State {
                 let window = &self.unmapped[i];
                 let top = window.toplevel().unwrap();
                 if !top.is_initial_configure_sent() {
-                    let size = (!State::wants_floating(window)).then(|| self.layout.new_window_size(None)).flatten();
+                    let (title, app_id) = State::title_and_app_id(window);
+                    let rule = self.config.window_rule(&app_id, &title);
+                    let floating = rule.floating.unwrap_or_else(|| State::wants_floating(window)) || rule.scratchpad.is_some();
+                    let size = (!floating).then(|| self.layout.new_window_size(rule.output.as_deref())).flatten();
                     top.with_pending_state(|s| s.size = size.map(Into::into));
                     top.send_configure();
                 }
@@ -266,6 +269,14 @@ impl State {
         win.foreign.send_title(&title);
         win.foreign.send_app_id(&app_id);
         win.foreign.send_done();
+        // A new name may fit other lines of the settings: how it looks follows.
+        let rule = self.config.window_rule(&app_id, &title);
+        if let Some(id) = self.win_for_surface(surface.wl_surface())
+            && let Some(w) = self.wins.get_mut(&id)
+        {
+            w.rule = rule;
+        }
+        self.queue_redraw();
     }
 
     /// Keep a menu on the display its window is on.

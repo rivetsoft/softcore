@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::parse_combo;
+use crate::{keys_id, parse_keys};
 
 /// A line's key and value, when it is a setting (not a comment, not blank).
 pub(crate) fn entry(line: &str) -> Option<(&str, &str)> {
@@ -16,10 +16,12 @@ pub(crate) fn entry(line: &str) -> Option<(&str, &str)> {
 /// A key as it is compared: a binding's keys in their one spelling, so `bind.shift+mod+q`
 /// and `bind.Mod+Shift+Q` are the same line.
 fn canon(key: &str) -> String {
-    match key.strip_prefix("bind.").and_then(|c| parse_combo(c).ok()) {
-        Some((mods, k)) => format!("bind.{}", mods.combo(&k)),
-        None => key.to_string(),
+    for prefix in ["bind.", "chord."] {
+        if let Some(keys) = key.strip_prefix(prefix).and_then(|c| parse_keys(c).ok()) {
+            return format!("{prefix}{}", keys_id(&keys));
+        }
     }
+    key.to_string()
 }
 
 /// A settings file open for changing. Comments, blank lines, the order of things and lines

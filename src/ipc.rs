@@ -173,7 +173,7 @@ pub fn workspaces(state: &State) -> Value {
             out.push(json!({
                 "id": ws.id,
                 "idx": wi + 1,
-                "name": Value::Null,
+                "name": ws.name,
                 "output": m.name,
                 "is_urgent": false,
                 "is_active": wi == m.active,

@@ -143,6 +143,11 @@ fn layer_blur(state: &State, output: &Output, layer: Layer) -> Vec<(WlSurface, R
     for l in map.layers_on(layer) {
         let Some(g) = map.layer_geometry(l) else { continue };
         let asked = with_states(l.wl_surface(), |s| s.cached_state.get::<BackgroundEffectSurfaceCachedState>().current().blur_region.clone());
+        // Its line in the settings has the last word, either way.
+        let rule = state.config.layer_rule(l.namespace()).blur;
+        if rule == Some(false) {
+            continue;
+        }
         match asked {
             Some(region) => {
                 for (kind, r) in region.rects {
@@ -153,7 +158,7 @@ fn layer_blur(state: &State, output: &Output, layer: Layer) -> Vec<(WlSurface, R
                     }
                 }
             }
-            None if state.config.blur_layers.iter().any(|n| n == l.namespace()) => out.push((l.wl_surface().clone(), Rect::new(g.loc.x, g.loc.y, g.size.w, g.size.h))),
+            None if rule == Some(true) => out.push((l.wl_surface().clone(), Rect::new(g.loc.x, g.loc.y, g.size.w, g.size.h))),
             None => {}
         }
     }
@@ -161,15 +166,23 @@ fn layer_blur(state: &State, output: &Output, layer: Layer) -> Vec<(WlSurface, R
 }
 
 /// `blur`: the picture of what is behind, and where these surfaces want it.
-fn layer_elements(renderer: &mut GlesRenderer, output: &Output, layer: Layer, scale: Scale<f64>, mut blur: Option<(&mut Backdrop, &[(WlSurface, Rect)], &mut u32)>, out: &mut Vec<Elem>) {
+fn layer_elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output, layer: Layer, scale: Scale<f64>, mut blur: Option<(&mut Backdrop, &[(WlSurface, Rect)], &mut u32)>, out: &mut Vec<Elem>) {
     let map = layer_map_for_output(output);
     // Menus of every surface on the layer first, so a neighbour never covers one.
-    let layers: Vec<_> = map.layers_on(layer).rev().filter_map(|l| map.layer_geometry(l).map(|g| (l.wl_surface().clone(), g.loc))).collect();
-    for (surface, loc) in &layers {
-        popup_elements(renderer, surface, *loc, scale, out);
+    let layers: Vec<_> = map.layers_on(layer).rev().filter_map(|l| map.layer_geometry(l).map(|g| (l.clone(), l.wl_surface().clone(), g, state.config.layer_rule(l.namespace())))).collect();
+    for (_, surface, g, _) in &layers {
+        popup_elements(renderer, surface, g.loc, scale, out);
     }
-    for (surface, loc) in &layers {
-        surface_elements(renderer, surface, *loc, scale, 1.0, out);
+    let look = state.ui.look(&state.config);
+    for (l, surface, g, rule) in &layers {
+        let loc = &g.loc;
+        surface_elements(renderer, surface, *loc, scale, rule.opacity.unwrap_or(1.0), out);
+        // A shadow under it, where its line in the settings asks for one.
+        if rule.shadow == Some(true) {
+            let deco = l.user_data().get_or_insert(|| std::cell::RefCell::new(Deco::default()));
+            let edges = Edges { border: false, shadow: true, color: [0; 3], color2: [0; 3], radius: look.radius, alpha: rule.opacity.unwrap_or(1.0), zoom: 1.0 };
+            out.extend(edges.shadow(state, &mut deco.borrow_mut(), Rect::new(g.loc.x, g.loc.y, g.size.w, g.size.h)));
+        }
         if let Some((behind, wanted, n)) = &mut blur {
             for (_, rect) in wanted.iter().filter(|(s, _)| s == surface) {
                 **n += 1;
@@ -371,15 +384,17 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         let rect = if shown < 1.0 { scaled(t.rect, SMALL + (1.0 - SMALL) * shown) } else { t.rect };
         let colors = border_colors(state, &look, t);
         let edges = Edges {
-            border: t.border && !t.fullscreen,
-            shadow: !t.fullscreen,
+            border: t.border && !t.fullscreen && win.rule.border != Some(false),
+            shadow: !t.fullscreen && win.rule.shadow != Some(false),
             color: colors.0,
             color2: colors.1,
             radius: if state.config.layout.border > 0 { look.radius } else { 0 },
             alpha: shown as f32,
             zoom: t.zoom,
         };
-        let alpha = if t.active || t.fullscreen { 1.0 } else { state.config.inactive_opacity } * shown as f32;
+        // What its own line says, with the focus or without; else solid with the focus and
+        // as the setting says without.
+        let alpha = win.rule.opacity.unwrap_or(if t.active || t.fullscreen { 1.0 } else { state.config.inactive_opacity }) * shown as f32;
         // Appearing, it is drawn a little small. On its way somewhere it is drawn as it is,
         // never stretched, and cut off at where it has got to: growing shows more of it,
         // shrinking wipes across how it looked before.
@@ -413,7 +428,7 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         }
         // What shows through it, blurred: the wallpaper, since tiled windows have nothing else
         // behind them (a floating one shows the wallpaper too, not the windows under it).
-        if let Some(wall) = wall.filter(|_| !t.fullscreen) {
+        if let Some(wall) = wall.filter(|_| !t.fullscreen && win.rule.blur != Some(false)) {
             out.extend(wall.piece(renderer, For::Window(t.id), rect, shown as f32));
         }
         out.extend(edges.shadow(state, &mut win.deco, rect));
@@ -444,9 +459,10 @@ pub fn start_closing(state: &mut State, id: WinId) {
     let Some(texture) = state.wins.get_mut(&id).and_then(|w| w.picture.take()) else { return };
     let look = state.ui.look(&state.config);
     let colors = border_colors(state, &look, &t);
+    let rule = state.wins.get(&id).map(|w| w.rule.clone()).unwrap_or_default();
     let edges = Edges {
-        border: t.border && !t.fullscreen,
-        shadow: !t.fullscreen,
+        border: t.border && !t.fullscreen && rule.border != Some(false),
+        shadow: !t.fullscreen && rule.shadow != Some(false),
         color: colors.0,
         color2: colors.1,
         radius: if state.config.layout.border > 0 { look.radius } else { 0 },
@@ -573,6 +589,20 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
         }
     }
 
+    // The list of what can follow a chord's keys, low in the middle of the screen.
+    if panels
+        && state.config.chord_panel
+        && state.active_output() == Some(output)
+        && let Some(chord) = &state.chord
+    {
+        let view = crate::chord::view(&state.config, chord);
+        let (buffer, (w, h)) = state.ui.chord_buffer(&state.config, state.mod_is_alt(), (size.w, size.h), &view);
+        let loc = Point::<i32, Logical>::from(((size.w - w) / 2, (size.h - h - 48).max(0))).to_f64().to_physical(scale);
+        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &buffer, None, None, None, Kind::Unspecified) {
+            out.push(Elem::Memory(e));
+        }
+    }
+
     let bg = state.ui.look(&state.config).background;
     let clear = [bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0, 1.0];
     let mut tiles = state.tiles(output);
@@ -590,8 +620,8 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
 
     // From the bottom up, since what is above may want a blurred picture of what is below.
     let mut low = Vec::new();
-    layer_elements(renderer, output, Layer::Bottom, scale, None, &mut low);
-    layer_elements(renderer, output, Layer::Background, scale, None, &mut low);
+    layer_elements(state, renderer, output, Layer::Bottom, scale, None, &mut low);
+    layer_elements(state, renderer, output, Layer::Background, scale, None, &mut low);
     match &programs {
         Some(p) if !tiles.is_empty() => crate::blur::update(&mut behind.wall, renderer, p, mode, scale.x, strength, &low, clear),
         _ => behind.wall = None,
@@ -610,11 +640,11 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
         _ => behind.scene = None,
     }
     let mut n = 0;
-    layer_elements(renderer, output, Layer::Overlay, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
+    layer_elements(state, renderer, output, Layer::Overlay, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
     for t in tiles.iter().rev().filter(|t| t.fullscreen) {
         window_elements(state, renderer, t, scale, None, &mut out);
     }
-    layer_elements(renderer, output, Layer::Top, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
+    layer_elements(state, renderer, output, Layer::Top, scale, behind.scene.as_mut().map(|b| (b, wanted.as_slice(), &mut n)), &mut out);
     out.append(&mut under);
     state.blur.outputs.insert(name, behind);
 
