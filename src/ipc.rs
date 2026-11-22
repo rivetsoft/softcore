@@ -25,6 +25,7 @@ pub struct Ipc {
     subscribers: Vec<UnixStream>,
     /// What listeners were last told, to say only what changed.
     last: (String, String, Option<u32>),
+    overview: bool,
 }
 
 impl Ipc {
@@ -47,7 +48,7 @@ impl Ipc {
             }
             Err(e) => tracing::warn!("softcore msg won't work: couldn't open {}: {e}", path.display()),
         }
-        Ipc { path, subscribers: Vec::new(), last: Default::default() }
+        Ipc { path, subscribers: Vec::new(), last: Default::default(), overview: false }
     }
 
     pub fn path(&self) -> &Path {
@@ -124,6 +125,7 @@ fn request(state: &mut State, args: &[String]) -> Result<Value, String> {
         ["outputs"] => Ok(outputs(state)),
         ["workspaces"] => Ok(workspaces(state)),
         ["windows"] => Ok(windows(state)),
+        ["overview-state"] => Ok(json!({"is_open": state.overview.on})),
         ["focused-window"] => {
             let id = state.layout.active_window();
             Ok(windows(state).as_array().and_then(|a| a.iter().find(|w| w["id"].as_u64() == id.map(u64::from)).cloned()).unwrap_or(Value::Null))
@@ -280,6 +282,10 @@ pub fn notify(state: &mut State) {
     }
     if focus != state.ipc.last.2 {
         events.push(json!({"WindowFocusChanged": {"id": focus}}));
+    }
+    if state.overview.on != state.ipc.overview {
+        state.ipc.overview = state.overview.on;
+        events.push(json!({"OverviewOpenedOrClosed": {"is_open": state.overview.on}}));
     }
     state.ipc.last = (ws_text, wins_text, focus);
     if events.is_empty() {

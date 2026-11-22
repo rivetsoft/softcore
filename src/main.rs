@@ -12,6 +12,7 @@ mod host;
 mod input;
 mod ipc;
 mod layout;
+mod overview;
 mod picker;
 mod portal;
 mod render;

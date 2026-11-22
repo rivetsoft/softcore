@@ -50,6 +50,26 @@ impl State {
         // A window given every key gets Softcore's bindings too, all but the way back.
         let all = !locked && self.all_keys.is_some() && self.all_keys == self.layout.active_window() && self.layer_focus.is_none();
         let found = self.config.binds.iter().find(|b| (!locked || b.locked) && (!all || b.action == Action::ToggleShortcutsInhibit) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
+        if found.is_none() && self.overview.on && !locked {
+            // The overview has the keyboard: arrows go about it, Return and Escape leave it,
+            // and nothing is typed into the window it will leave on.
+            if sym.is_modifier_key() {
+                return None;
+            }
+            use crate::layout::Dir;
+            let dir = match sym {
+                Keysym::Left => Some(Dir::Left),
+                Keysym::Right => Some(Dir::Right),
+                Keysym::Up => Some(Dir::Up),
+                Keysym::Down => Some(Dir::Down),
+                _ => None,
+            };
+            if let Some(d) = dir {
+                self.layout.focus_or_workspace(d);
+                self.queue_redraw();
+            }
+            return Some(matches!(sym, Keysym::Escape | Keysym::Return | Keysym::KP_Enter).then_some(Action::Overview(Some(false))));
+        }
         found.map(Some)
     }
 
@@ -120,6 +140,13 @@ impl State {
                         return;
                     }
                 }
+                if !pressed && std::mem::take(&mut self.overview.eat_release) {
+                    return;
+                }
+                if pressed && self.overview.on && !self.lock.locked && self.ui.panel == Panel::None && self.surface_under(self.pointer_pos).is_none() {
+                    crate::overview::clicked(self, self.pointer_pos);
+                    return;
+                }
                 if pressed && !pointer.is_grabbed() && !self.lock.locked {
                     self.clicked(self.pointer_pos);
                     // Mod and a button on a floating window: left moves it, right resizes it.
@@ -183,7 +210,7 @@ impl State {
     fn wheel<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
         let mods = self.seat.get_keyboard().map(|k| k.modifier_state()).unwrap_or_default();
         let mod_down = if self.mod_is_alt() { mods.alt } else { mods.logo };
-        if mod_down && !self.lock.locked {
+        if (mod_down || self.overview.on) && !self.lock.locked {
             // Mod and the wheel: through the workspaces; with Shift, along the columns.
             let v = event.amount_v120(Axis::Vertical).unwrap_or(0.0);
             if v != 0.0 {

@@ -113,6 +113,8 @@ pub enum Action {
     FocusMonitor(i32),
     MoveColumnToMonitor(i32),
     ShowHotkeyOverlay,
+    /// Every workspace at once, drawn small. None: open if shut, shut if open.
+    Overview(Option<bool>),
     ToggleShortcutsInhibit,
     PowerOffMonitors,
     PowerOnMonitors,
@@ -176,6 +178,9 @@ impl Action {
             "move-column-to-monitor-left" | "move-column-to-monitor-previous" => Action::MoveColumnToMonitor(-1),
             "move-column-to-monitor-right" | "move-column-to-monitor-next" => Action::MoveColumnToMonitor(1),
             "show-hotkey-overlay" => Action::ShowHotkeyOverlay,
+            "toggle-overview" => Action::Overview(None),
+            "open-overview" => Action::Overview(Some(true)),
+            "close-overview" => Action::Overview(Some(false)),
             "toggle-keyboard-shortcuts-inhibit" => Action::ToggleShortcutsInhibit,
             "power-off-monitors" => Action::PowerOffMonitors,
             "power-on-monitors" => Action::PowerOnMonitors,
@@ -217,6 +222,9 @@ impl Action {
             Action::FocusMonitor(b) => format!("{} display", if *b > 0 { "Next" } else { "Previous" }),
             Action::MoveColumnToMonitor(b) => format!("Move to the {} display", if *b > 0 { "next" } else { "previous" }),
             Action::ShowHotkeyOverlay => "Show these keys".into(),
+            Action::Overview(None) => "Overview: every workspace at once".into(),
+            Action::Overview(Some(true)) => "Open the overview".into(),
+            Action::Overview(Some(false)) => "Close the overview".into(),
             Action::ToggleShortcutsInhibit => "Give this window every key, or take them back".into(),
             Action::PowerOffMonitors => "Displays off".into(),
             Action::PowerOnMonitors => "Displays on".into(),
@@ -417,6 +425,7 @@ Mod+C center-column
 Mod+V toggle-window-floating
 Mod+Shift+V switch-focus-between-floating-and-tiling
 Mod+S toggle-scratchpad
+Mod+O toggle-overview
 Mod+Shift+S move-window-to-scratchpad
 Mod+Page_Down focus-workspace-down
 Mod+Page_Up focus-workspace-up

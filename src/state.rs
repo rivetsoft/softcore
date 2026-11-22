@@ -140,6 +140,7 @@ pub struct State {
     pub blur: crate::blur::Blur,
     /// A floating window being moved or resized with the pointer.
     pub drag: Option<crate::float::Drag>,
+    pub overview: crate::overview::Overview,
     /// Displays that are plugged in and turned off in the settings: still listed, so they
     /// can be turned on again.
     pub off_outputs: Vec<OffOutput>,
@@ -269,6 +270,7 @@ impl State {
             watch: None,
             blur: Default::default(),
             drag: None,
+            overview: Default::default(),
             off_outputs: Vec::new(),
             all_keys: None,
             casts: Default::default(),
@@ -484,7 +486,10 @@ impl State {
     /// The windows on a display now, bottom first.
     pub fn tiles(&self, output: &Output) -> Vec<Tile> {
         match self.layout.monitor(&output.name()) {
-            Some(m) => self.layout.tiles(m, &self.float_size()),
+            Some(m) => match self.overview_map(&self.layout.mons[m]) {
+                Some(map) => self.overview_tiles(m, &map),
+                None => self.layout.tiles(m, &self.float_size()),
+            },
             None => Vec::new(),
         }
     }
@@ -644,6 +649,11 @@ impl State {
         let step = if self.config.animations { dt * self.config.animation_speed / 0.2 } else { 1.0 };
         for w in self.wins.values_mut().filter(|w| w.shown < 1.0) {
             w.shown = (w.shown + step).min(1.0);
+            moving = true;
+        }
+        let to = if self.overview.on { 1.0 } else { 0.0 };
+        if self.overview.p != to {
+            self.overview.p = if self.overview.on { (self.overview.p + step).min(1.0) } else { (self.overview.p - step).max(0.0) };
             moving = true;
         }
         moving |= !self.closing.is_empty();
@@ -828,6 +838,10 @@ impl State {
                 }
             }
             Action::MoveColumnToMonitor(b) => self.layout.move_column_to_monitor(b),
+            Action::Overview(on) => {
+                self.set_overview(on.unwrap_or(!self.overview.on));
+                return;
+            }
             Action::ShowHotkeyOverlay => self.ui.show(if self.ui.panel == Panel::Keys { Panel::None } else { Panel::Keys }),
             Action::PowerOffMonitors => self.monitors_off = true,
             Action::PowerOnMonitors => self.monitors_off = false,
@@ -875,6 +889,11 @@ impl State {
             let geo = map.layer_geometry(l)?;
             l.surface_under(local - geo.loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + geo.loc).to_f64() + origin))
         };
+        // In the overview the windows are pictures to pick from: only the shell's panels,
+        // which stay as they are, hear from the pointer.
+        if self.overview.on {
+            return layer_under(Layer::Overlay).or_else(|| layer_under(Layer::Top));
+        }
         let tiles = self.tiles(output);
         let window_under = |fullscreen: bool| {
             tiles.iter().rev().filter(|t| t.fullscreen == fullscreen).find_map(|t| {

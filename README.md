@@ -135,7 +135,7 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `border_inactive`, `border_active_to`, `border_inactive_to`, `border_angle`,
 `inactive_opacity`, `shadows`, `shadow_size`, `shadow_offset`,
 `shadow_opacity`, `shadow_color`, `blur`, `blur_strength`, `blur_layers`, `animations`,
-`animation_speed`, `scroll`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
+`animation_speed`, `scroll`, `overview_zoom`, `column_widths`, `center_short_columns`, `scratchpad_size`, `default_width`, `theme`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
 `natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
@@ -159,6 +159,24 @@ windows sharing a row; a column's width settings (`default_width`, `column_width
 row. Workspaces, which sit one under the other beside sideways strips, sit side by side
 here. The keys and action names stay as they are: `focus-column-left` means left on the
 screen, and `consume-or-expel-window-left` means towards the row before.
+
+## The overview
+
+Mod+O (`toggle-overview`; there are `open-overview` and `close-overview` too) draws
+everything back: every workspace of each display at once, at half size, with the strips
+running off past the edges of the screen as far as they go. `overview_zoom` says how small
+(0.5 is half).
+
+In it, a click on a window gives it the focus and a click on a workspace brings that one
+into view, and either shuts the overview. The arrows move the focus, on to the next
+workspace past the end of a column; the wheel goes through the workspaces, and with Shift
+along the strip. Return or Escape shuts it where the focus is. The bindings all go on
+working, so windows can be moved between workspaces with the view drawn back, but nothing
+is typed into a window, and the windows hear nothing from the pointer. The shell's panels
+stay as they are and can be used.
+
+`softcore msg overview-state` says whether it is open, and the event stream says
+`OverviewOpenedOrClosed` when that changes, both as niri does.
 
 ## Displays
 
@@ -321,7 +339,9 @@ cursor-shape, single-pixel buffers, and buffers straight from the GPU (linux-dma
   until there are window rules. Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
 - Animations for floating windows and for going fullscreen and back, which jump.
-- Window rules, named workspaces, tabbed columns, an overview. A dialog opens in the
+- Window rules, named workspaces, tabbed columns. In the overview, dragging a window to
+  another workspace, a corner of the screen that opens it, and a touchpad gesture for it.
+  A dialog opens in the
   middle of the screen, not over its parent, and a window in a column can't be dragged
   out of it with the pointer. Scratchpads with names of their own, and one that starts its program when
   first asked for, wait for window rules.

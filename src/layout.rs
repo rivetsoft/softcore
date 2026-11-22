@@ -219,6 +219,8 @@ pub struct Tile {
     pub moving: bool,
     /// Changing size on the way.
     pub resizing: bool,
+    /// Drawn this much smaller than it is (in the overview). 1: as it is.
+    pub zoom: f64,
 }
 
 /// Where a floating window was put and the size it was given, when it was: until then it
@@ -507,6 +509,21 @@ impl Layout {
             }
         }
         self.settle();
+    }
+
+    /// As `focus`, but where there is no window further that way in the column (the row),
+    /// on to the workspace that way.
+    pub fn focus_or_workspace(&mut self, dir: Dir) {
+        let across = match self.on_strip(dir) {
+            Dir::Up => Some(-1),
+            Dir::Down => Some(1),
+            _ => None,
+        };
+        let at_end = |ws: &Workspace, by: i32| ws.float_focus.is_some() || ws.cols.get(ws.active).is_none_or(|c| if by < 0 { c.active == 0 } else { c.active + 1 >= c.wins.len() });
+        match (across, self.active_workspace()) {
+            (Some(by), Some(ws)) if at_end(ws, by) => self.focus_workspace_by(by),
+            _ => self.focus(dir),
+        }
     }
 
     pub fn focus_column_edge(&mut self, last: bool) {
@@ -1053,7 +1070,7 @@ impl Layout {
                     rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
                 }
                 if ws.fullscreen != Some(*id) {
-                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0) });
+                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0), zoom: 1.0 });
                 }
             }
         }
@@ -1074,11 +1091,11 @@ impl Layout {
             let y = y.min(area.y + area.h - HOLD).max(area.y);
             let rect = Rect::new(x, y, w, h);
             if ws.fullscreen != Some(*id) {
-                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false });
+                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0 });
             }
         }
         if let Some(id) = ws.fullscreen {
-            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false });
+            out.push(Tile { id, rect: Rect::new(0, 0, m.size.0, m.size.1), border: false, active: focused, floating: false, fullscreen: true, moving: false, resizing: false, zoom: 1.0 });
         }
     }
 
@@ -1105,6 +1122,21 @@ impl Layout {
             }
         }
         out.retain(|t| t.rect.intersects(&screen));
+        out
+    }
+
+    /// The windows of every workspace of a display, each where it is on its own workspace
+    /// (the strip's scroll applied, the slide between workspaces not), with the workspace's
+    /// place in the stack.
+    pub fn all_tiles(&self, mon: usize, float_size: &dyn Fn(WinId) -> (i32, i32)) -> Vec<(usize, Tile)> {
+        let Some(m) = self.mons.get(mon) else { return Vec::new() };
+        let mut out = Vec::new();
+        let mut tiles = Vec::new();
+        for (wi, ws) in m.wss.iter().enumerate() {
+            tiles.clear();
+            self.ws_tiles(m, ws, mon == self.active_mon && wi == m.active, float_size, Some(ws.view), &mut tiles);
+            out.extend(tiles.iter().map(|t| (wi, *t)));
+        }
         out
     }
 
@@ -1188,6 +1220,27 @@ mod tests {
         l.finish_animations();
         assert_eq!(rect(&l, 1), Some(Rect::new(12, 12, 481, 281)));
         assert_eq!(rect(&l, 2), Some(Rect::new(12, 307, 481, 281)));
+    }
+
+    #[test]
+    fn past_the_end_of_a_column_is_the_next_workspace() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.consume_or_expel(Dir::Left);
+        // Two windows in one column, the lower one focused: up is the window above, and up
+        // again has nowhere to go; down from the lower one is the workspace below.
+        l.focus_or_workspace(Dir::Up);
+        assert_eq!(l.active_window(), Some(1));
+        l.focus_or_workspace(Dir::Up);
+        assert_eq!((l.mons[0].active, l.active_window()), (0, Some(1)));
+        l.focus_or_workspace(Dir::Down);
+        l.focus_or_workspace(Dir::Down);
+        assert_eq!((l.mons[0].active, l.active_window()), (1, None));
+        l.focus_or_workspace(Dir::Up);
+        assert_eq!(l.mons[0].active, 0);
+        // Every workspace's windows, for the overview: both of these on the first.
+        assert_eq!(l.all_tiles(0, &fs).iter().map(|(ws, t)| (*ws, t.id)).collect::<Vec<_>>(), vec![(0, 1), (0, 2)]);
     }
 
     #[test]

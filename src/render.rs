@@ -35,6 +35,7 @@ smithay::backend::renderer::element::render_elements! {
     Scaled=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Cropped=CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Texture=TextureRenderElement<GlesTexture>,
+    Solid=smithay::backend::renderer::element::solid::SolidColorRenderElement,
 }
 
 /// A ring with round outer corners, and inner corners rounded by the same centre: drawn over
@@ -289,20 +290,24 @@ struct Edges {
     color2: [u8; 3],
     radius: i32,
     alpha: f32,
+    /// Drawn this much smaller, with the window (in the overview).
+    zoom: f64,
 }
 
 impl Edges {
     fn border(&self, state: &State, deco: &mut Deco, rect: Rect) -> Option<Elem> {
         let shaders = state.shaders.as_ref().filter(|_| self.border)?;
-        Some(deco.border(shaders, BorderKey { rect, color: self.color, color2: self.color2, angle: state.config.border_angle, width: state.config.layout.border, radius: self.radius, alpha: self.alpha }))
+        let small = |v: i32| if v > 0 { ((v as f64 * self.zoom).round() as i32).max(1) } else { 0 };
+        Some(deco.border(shaders, BorderKey { rect, color: self.color, color2: self.color2, angle: state.config.border_angle, width: small(state.config.layout.border), radius: small(self.radius), alpha: self.alpha }))
     }
 
     fn shadow(&self, state: &State, deco: &mut Deco, rect: Rect) -> Option<Elem> {
         let c = &state.config;
         let shaders = state.shaders.as_ref().filter(|_| self.shadow && c.shadows && c.shadow_opacity > 0.0)?;
-        let b = if self.border { c.layout.border } else { 0 };
+        let small = |v: i32| if v != 0 { (v as f64 * self.zoom).round() as i32 } else { 0 };
+        let b = if self.border { small(c.layout.border).max(1) } else { 0 };
         let rect = Rect::new(rect.x - b, rect.y - b, rect.w + 2 * b, rect.h + 2 * b);
-        Some(deco.shadow(shaders, ShadowKey { rect, radius: self.radius, size: c.shadow_size, offset: c.shadow_offset, opacity: c.shadow_opacity, color: c.shadow_color, alpha: self.alpha }))
+        Some(deco.shadow(shaders, ShadowKey { rect, radius: small(self.radius), size: small(c.shadow_size).max(1), offset: small(c.shadow_offset), opacity: c.shadow_opacity, color: c.shadow_color, alpha: self.alpha }))
     }
 }
 
@@ -348,12 +353,13 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
             color2: colors.1,
             radius: if state.config.layout.border > 0 { look.radius } else { 0 },
             alpha: shown as f32,
+            zoom: t.zoom,
         };
         let alpha = if t.active || t.fullscreen { 1.0 } else { state.config.inactive_opacity } * shown as f32;
         // Appearing, it is drawn a little small. On its way somewhere it is drawn as it is,
         // never stretched, and cut off at where it has got to: growing shows more of it,
         // shrinking wipes across how it looked before.
-        let grow = (shown < 1.0 && t.rect.w > 0).then(|| Scale::from(rect.w as f64 / t.rect.w as f64));
+        let grow = ((shown < 1.0 || t.zoom != 1.0) && t.rect.w > 0).then(|| Scale::from(t.zoom * rect.w as f64 / t.rect.w as f64));
         let at = Point::<i32, Logical>::from((rect.x, rect.y));
         if grow.is_none() {
             popup_elements(renderer, &surface, at, scale, out);
@@ -421,6 +427,7 @@ pub fn start_closing(state: &mut State, id: WinId) {
         color2: colors.1,
         radius: if state.config.layout.border > 0 { look.radius } else { 0 },
         alpha: 1.0,
+        zoom: t.zoom,
     };
     state.closing.push(Closing { output: output.name(), rect: t.rect, texture, id: Id::new(), deco: Deco::default(), edges, t: 0.0 });
 }
@@ -546,6 +553,7 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     for t in tiles.iter().rev().filter(|t| !t.fullscreen) {
         window_elements(state, renderer, t, scale, behind.wall.as_mut(), &mut under);
     }
+    crate::overview::backdrop(state, output, scale, &mut under);
     under.append(&mut low);
 
     let wanted: Vec<(WlSurface, Rect)> = if programs.is_some() { [Layer::Overlay, Layer::Top].into_iter().flat_map(|l| layer_blur(state, output, l)).collect() } else { Vec::new() };
