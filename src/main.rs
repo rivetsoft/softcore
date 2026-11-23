@@ -45,7 +45,8 @@ Usage:
   softcore settings         Show or change settings (softcore settings help)
   softcore portal           The screen-sharing service apps reach through xdg-desktop-portal
   softcore validate         Check the settings file and say what couldn't be read
-  softcore install          Put the session's files in place (the portal's, systemd's)
+  softcore install          Put the session's files in place; --system installs Softcore
+                            for everyone and lists it in the login manager
 
 Options:
   --tty                On displays of its own (the default from a TTY)
@@ -72,7 +73,8 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("msg") => std::process::exit(ipc::client(&args[1..])),
         Some("portal") => std::process::exit(portal::run()),
-        Some("install") => std::process::exit(install::run(&args[1..])),
+        Some("install") => std::process::exit(install::run(&args[1..], false)),
+        Some("uninstall") => std::process::exit(install::run(&args[1..], true)),
         Some("settings") => std::process::exit(settings_cli::run(&args[1..])),
         Some("validate") => {
             let c = config::load();

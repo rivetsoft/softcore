@@ -49,6 +49,33 @@ window away in the scratchpad and Mod+` shows it floating over whatever is in vi
 it away again),
 Mod+Shift+E leave.
 
+## Installing
+
+```sh
+./install.sh               # builds Softcore, then asks for your password to install it
+./install.sh --uninstall   # takes it all away again
+```
+
+That installs Softcore for everyone on the machine, and it is in the login manager's list
+of sessions from the next time you log out:
+
+| What | Where |
+| --- | --- |
+| The program | `/usr/local/bin/softcore` |
+| The entry login managers list | `/usr/share/wayland-sessions/softcore.desktop` |
+| What makes the session one to systemd | `/usr/lib/systemd/user/softcore-session.target` |
+| The portal's files | `/usr/share/xdg-desktop-portal/portals/softcore.portal`, `/usr/share/xdg-desktop-portal/softcore-portals.conf` |
+
+The script is `cargo build --release` and then `sudo softcore install --system`, which a
+built Softcore can do on its own. For a package, `DESTDIR=/some/root softcore install
+--system` writes the same files under that folder.
+
+Without root, `softcore install` puts the session target and the portal's files under your
+home (`~/.config`, `~/.local/share`). That is enough for the file picker and screen sharing
+when you start Softcore from a TTY yourself, but a login manager won't list it.
+`softcore uninstall`, with `--system` or without, takes away what the matching install
+wrote.
+
 ## What it shares with Rivet
 
 Softcore depends on the shared crates of [rivetsoft/apps](https://github.com/rivetsoft/apps),
@@ -494,15 +521,7 @@ Programs that capture the screen directly (`grim`, and screenshots from a shell)
 through ext-image-copy-capture.
 
 For apps to reach it, and the desktop's file picker, a few files from `data/` have to be
-in place. `softcore install` puts them there for you, and `sudo softcore install --system`
-for everyone, which also adds the entry login managers list:
-
-| File | For you | For everyone |
-| --- | --- | --- |
-| `softcore-session.target` | `~/.config/systemd/user/` | `/usr/lib/systemd/user/` |
-| `softcore.portal` | `~/.local/share/xdg-desktop-portal/portals/` | `/usr/share/xdg-desktop-portal/portals/` |
-| `softcore-portals.conf` | `~/.config/xdg-desktop-portal/` | `/usr/share/xdg-desktop-portal/` |
-| `softcore.desktop` | | `/usr/share/wayland-sessions/` |
+in place; [Installing](#installing) puts them there.
 
 The target is what makes the session one to systemd. On displays of its own Softcore tells
 D-Bus and systemd where it is and starts `softcore-session.target`, which brings up
