@@ -454,6 +454,9 @@ Print, or Mod+S (`screenshot`), dims the screen and waits to be told what the pi
 Drag out an area with the pointer, or click a window for an area that is exactly that
 window, then press Enter. With nothing chosen, Enter takes the whole display.
 
+A row at the foot of the screen names the keys that finish it (save, copy, edit where the
+program for that is installed, cancel) and gives the size of the area chosen.
+
 | Key | What it does |
 | --- | --- |
 | Enter, Space | Saves the picture and puts it on the clipboard. |

@@ -64,6 +64,8 @@ pub struct View {
     /// The area's size in pixels. None: the whole display.
     pub size: Option<(i32, i32)>,
     pub pointer: bool,
+    /// Whether E would open the picture to be marked up.
+    pub edit: bool,
 }
 
 /// The rectangle between two points, kept inside a display of this size.
@@ -242,14 +244,13 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     let here = sh.output == output.name();
     let area = sh.area.filter(|_| here);
     let ids = sh.ids.clone();
-    // The area's size, once there is one. Nothing else is written on the screen.
-    if here && area.is_some() {
+    if here {
         let px = area.map(|r| {
             let p: Rectangle<i32, Physical> = r.to_physical_precise_round(scale);
             (p.size.w, p.size.h)
         });
-        let view = View { size: px, pointer: sh.pointer };
-        let (buffer, (w, h)) = state.ui.shot_buffer(&state.config, &view);
+        let view = View { size: px, pointer: sh.pointer, edit: installed(&state.config.screenshot_edit) };
+        let (buffer, (w, h)) = state.ui.shot_buffer(&state.config, (size.w, size.h), &view);
         let loc = Point::<i32, Logical>::from(((size.w - w) / 2, (size.h - h - 48).max(0))).to_f64().to_physical(scale);
         if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &buffer, None, None, None, Kind::Unspecified) {
             out.push(Elem::Memory(e));
