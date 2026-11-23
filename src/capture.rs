@@ -105,27 +105,11 @@ pub fn capture(state: &mut State, renderer: &mut GlesRenderer, source: &Source, 
     Some(Shot { rgba, w: size.w, h: size.h })
 }
 
-pub fn save_png(shot: &Shot, path: &std::path::Path) -> Result<(), String> {
-    let img = image::RgbaImage::from_raw(shot.w as u32, shot.h as u32, shot.rgba.clone()).ok_or("the frame was an unexpected size")?;
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    img.save(path).map_err(|e| format!("couldn't write {}: {e}", path.display()))
-}
-
 /// After each frame is drawn: the screenshot asked for, the frames capturing programs wait
 /// for, and the next frame of every screen being shared.
 pub fn after_draw(state: &mut State, renderer: &mut GlesRenderer) {
-    if let Some(path) = state.screenshot.take() {
-        let shot = state.active_output().map(|o| Source::Output(o.name())).and_then(|s| capture(state, renderer, &s, false, true));
-        match shot {
-            Some(shot) => {
-                if let Err(e) = save_png(&shot, &path) {
-                    tracing::warn!("{e}");
-                }
-            }
-            None => tracing::warn!("couldn't take a screenshot"),
-        }
+    if let Some(wanted) = state.screenshot.take() {
+        crate::shot::take(state, renderer, wanted);
     }
     for (source, cursor, frame) in std::mem::take(&mut state.captures.waiting) {
         fill_frame(state, renderer, &source, cursor, frame);

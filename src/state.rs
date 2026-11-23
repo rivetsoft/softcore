@@ -146,8 +146,10 @@ pub struct State {
     pub ui: Ui,
     pub shaders: Option<Shaders>,
     pub redraw: bool,
-    /// Where the next frame drawn should also be saved.
-    pub screenshot: Option<PathBuf>,
+    /// A picture to take once the next frame is drawn.
+    pub screenshot: Option<crate::shot::Wanted>,
+    /// Choosing what to take a picture of.
+    pub shooter: Option<crate::shot::Shooter>,
     pub ipc: Ipc,
     pub captures: crate::capture::Captures,
     /// Windows that have closed and are fading out.
@@ -296,6 +298,7 @@ impl State {
             shaders: None,
             redraw: true,
             screenshot: None,
+            shooter: None,
             ipc,
             captures: Default::default(),
             closing: Vec::new(),
@@ -950,12 +953,23 @@ impl State {
                     b.change_vt(n);
                 }
             }
-            Action::Screenshot(path) => {
-                let path = path.map(PathBuf::from).unwrap_or_else(|| {
-                    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                    rivet_xdg::places::home().join(format!("Pictures/Screenshots/softcore-{secs}.png"))
-                });
-                self.screenshot = Some(path);
+            Action::Screenshot => {
+                crate::shot::open(self);
+                return;
+            }
+            Action::ScreenshotScreen(file) => {
+                if let Some(o) = self.active_output().map(|o| o.name()) {
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Screen(o), file: file.map(PathBuf::from), pointer: false, save: true });
+                }
+                self.queue_redraw();
+                return;
+            }
+            Action::ScreenshotWindow(file) => {
+                if let Some(id) = self.layout.active_window() {
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Window(id), file: file.map(PathBuf::from), pointer: false, save: true });
+                }
+                self.queue_redraw();
+                return;
             }
         }
         self.layer_focus = None;

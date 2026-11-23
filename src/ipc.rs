@@ -152,7 +152,7 @@ fn request(state: &mut State, args: &[String]) -> Result<Value, String> {
             if crate::cast::stop(state, id) { Ok(Value::Null) } else { Err(format!("no cast {id}")) }
         }
         ["screenshot", rest @ ..] => {
-            state.do_action(Action::Screenshot(rest.first().map(|s| s.to_string())));
+            state.do_action(Action::ScreenshotScreen(rest.first().map(|s| s.to_string())));
             Ok(Value::Null)
         }
         // niri's way of naming a window, which shells use to close or raise one.

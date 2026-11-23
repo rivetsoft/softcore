@@ -19,6 +19,7 @@ mod picker;
 mod portal;
 mod render;
 mod settings_cli;
+mod shot;
 mod state;
 mod udev;
 mod watch;

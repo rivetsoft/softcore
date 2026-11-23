@@ -117,6 +117,7 @@ pub const SETTINGS: &[Setting] = &[
     s("repeat_rate", Group::Keyboard, "Repeats a second", "", Kind::Int { min: 1, max: 200 }, "25"),
     s("tap_to_click", Group::Pointer, "Tap to click", "On touchpads.", Kind::Bool, "true"),
     s("natural_scroll", Group::Pointer, "Natural scrolling", "The page follows the fingers.", Kind::Bool, "false"),
+    s("screenshot_dir", Group::Look, "Where screenshots go", "A folder. Empty: Screenshots in your Pictures.", Kind::Text, ""),
     s("cursor_theme", Group::Pointer, "Cursor theme", "Empty: the desktop's.", Kind::Text, ""),
     s("cursor_size", Group::Pointer, "Cursor size", "In pixels.", Kind::Int { min: 8, max: 256 }, "24"),
 ];
@@ -211,6 +212,7 @@ pub struct Config {
     pub natural_scroll: bool,
     pub tap_to_click: bool,
     pub cursor_theme: String,
+    pub screenshot_dir: String,
     pub cursor_size: u32,
     pub spawn: Vec<String>,
     pub env: Vec<(String, String)>,
@@ -273,6 +275,7 @@ impl Default for Config {
             natural_scroll: false,
             tap_to_click: true,
             cursor_theme: String::new(),
+            screenshot_dir: String::new(),
             cursor_size: 24,
             spawn: Vec::new(),
             env: Vec::new(),
@@ -498,6 +501,7 @@ impl Config {
             "tap_to_click" => self.tap_to_click = boolean(),
             "natural_scroll" => self.natural_scroll = boolean(),
             "cursor_theme" => self.cursor_theme = v.to_string(),
+            "screenshot_dir" => self.screenshot_dir = v.to_string(),
             "cursor_size" => self.cursor_size = int().unwrap_or(24) as u32,
             other => unreachable!("{other} is in SETTINGS but not read"),
         }

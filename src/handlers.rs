@@ -424,7 +424,16 @@ impl smithay::wayland::input_method::InputMethodHandler for State {
 }
 
 impl SelectionHandler for State {
-    type SelectionUserData = ();
+    /// A screenshot on the clipboard, as a PNG.
+    type SelectionUserData = std::sync::Arc<[u8]>;
+
+    fn send_selection(&mut self, _ty: smithay::wayland::selection::SelectionTarget, _mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>, data: &Self::SelectionUserData) {
+        // A reader may take its time, or leave half way: not on the compositor's own thread.
+        let data = data.clone();
+        std::thread::spawn(move || {
+            let _ = std::io::Write::write_all(&mut std::fs::File::from(fd), &data);
+        });
+    }
 }
 
 impl DataDeviceHandler for State {

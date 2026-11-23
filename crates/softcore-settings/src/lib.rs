@@ -131,7 +131,12 @@ pub enum Action {
     PowerOffMonitors,
     PowerOnMonitors,
     ReloadConfig,
-    Screenshot(Option<String>),
+    /// Choose what to take a picture of, on screen.
+    Screenshot,
+    /// A picture of the display, at once. With a file: only saved there.
+    ScreenshotScreen(Option<String>),
+    /// A picture of the focused window, at once.
+    ScreenshotWindow(Option<String>),
     ChangeVt(i32),
 }
 
@@ -207,7 +212,9 @@ impl Action {
             "power-on-monitors" => Action::PowerOnMonitors,
             "reload-config" | "load-config-file" => Action::ReloadConfig,
             "change-vt" => Action::ChangeVt(num("a TTY's number")? as i32),
-            "screenshot" => Action::Screenshot((!rest.is_empty()).then(|| rest.to_string())),
+            "screenshot" => Action::Screenshot,
+            "screenshot-screen" => Action::ScreenshotScreen((!rest.is_empty()).then(|| rest.to_string())),
+            "screenshot-window" => Action::ScreenshotWindow((!rest.is_empty()).then(|| rest.to_string())),
             _ => return Err(format!("no action called {name}")),
         })
     }
@@ -261,7 +268,9 @@ impl Action {
             Action::PowerOffMonitors => "Displays off".into(),
             Action::PowerOnMonitors => "Displays on".into(),
             Action::ReloadConfig => "Read the settings again".into(),
-            Action::Screenshot(_) => "Screenshot".into(),
+            Action::Screenshot => "Take a picture of part of the screen".into(),
+            Action::ScreenshotScreen(_) => "Take a picture of the screen".into(),
+            Action::ScreenshotWindow(_) => "Take a picture of the window".into(),
             Action::ChangeVt(n) => format!("TTY {n}"),
         }
     }
@@ -493,9 +502,9 @@ Mod+Ctrl+Shift+F toggle-windowed-fullscreen
 Mod+C center-column
 Mod+V toggle-window-floating
 Mod+Shift+V switch-focus-between-floating-and-tiling
-Mod+S toggle-scratchpad
+Mod+grave toggle-scratchpad
 Mod+O toggle-overview
-Mod+Shift+S move-window-to-scratchpad
+Mod+Shift+grave move-window-to-scratchpad
 Mod+Page_Down focus-workspace-down
 Mod+Page_Up focus-workspace-up
 Mod+U focus-workspace-down
@@ -527,6 +536,10 @@ Mod+Shift+Ctrl+Right move-column-to-monitor-right
 Mod+Shift+Slash show-hotkey-overlay
 Mod+Shift+Escape toggle-keyboard-shortcuts-inhibit
 Mod+Shift+E quit
+Print screenshot
+Mod+S screenshot
+Ctrl+Print screenshot-screen
+Alt+Print screenshot-window
 Mod+Escape allow-when-locked spawn rivet-shell msg lock
 XF86AudioRaiseVolume allow-when-locked spawn rivet-shell msg volume up
 XF86AudioLowerVolume allow-when-locked spawn rivet-shell msg volume down

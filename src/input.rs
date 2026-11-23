@@ -26,6 +26,16 @@ impl State {
         if vt < 12 {
             return Some(Some(Action::ChangeVt(vt as i32 + 1)));
         }
+        if self.shooter.is_some() {
+            if self.lock.locked {
+                self.shooter = None;
+            } else if sym.is_modifier_key() {
+                return None;
+            } else {
+                crate::shot::key(self, mods, sym);
+                return Some(None);
+            }
+        }
         if self.ui.panel == Panel::Share && !self.lock.locked {
             let chosen = self.picker.as_ref().map(|p| p.selected);
             match sym {
@@ -135,6 +145,10 @@ impl State {
                         return;
                     }
                 }
+                if self.shooter.is_some() && !self.lock.locked {
+                    crate::shot::button(self, event.button_code(), pressed);
+                    return;
+                }
                 if !pressed && std::mem::take(&mut self.overview.eat_release) {
                     return;
                 }
@@ -175,6 +189,12 @@ impl State {
         if self.drag.is_some() {
             // The window follows the pointer; nothing under it hears of the movement.
             crate::float::moved(self);
+            self.queue_redraw();
+            return;
+        }
+        if self.shooter.is_some() && !self.lock.locked {
+            // The pointer is choosing: nothing under it hears of the movement.
+            crate::shot::moved(self);
             self.queue_redraw();
             return;
         }

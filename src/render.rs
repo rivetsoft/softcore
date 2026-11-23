@@ -198,7 +198,9 @@ fn cursor_elements(state: &mut State, renderer: &mut GlesRenderer, output: &Outp
         return;
     }
     let at = state.pointer_pos - geo.loc.to_f64();
-    match state.cursor_status.clone() {
+    // Choosing what to take a picture of: a cross, whatever is under the pointer.
+    let status = if state.shooter.is_some() && !state.lock.locked { CursorImageStatus::Named(smithay::input::pointer::CursorIcon::Crosshair) } else { state.cursor_status.clone() };
+    match status {
         CursorImageStatus::Hidden => {}
         CursorImageStatus::Surface(surface) => {
             let hotspot = with_states(&surface, |s| s.data_map.get::<CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot).unwrap_or_default());
@@ -579,6 +581,9 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     }
 
     let size = State::output_size(output);
+    if panels {
+        crate::shot::elements(state, renderer, output, scale, &mut out);
+    }
     if panels
         && state.active_output() == Some(output)
         && let Some((buffer, (w, h))) = state.ui.panel_buffer(&state.config, state.mod_is_alt(), (size.w, size.h), state.picker.as_mut())

@@ -47,6 +47,8 @@ pub struct Ui {
     dark: bool,
     /// The list of a chord's next keys, as last painted.
     chord: Option<(crate::chord::View, MemoryRenderBuffer, (i32, i32))>,
+    /// The note shown while a screenshot is chosen, as last painted.
+    shot: Option<(crate::shot::View, MemoryRenderBuffer, (i32, i32))>,
 }
 
 fn choice(c: &Config) -> Choice {
@@ -66,7 +68,7 @@ fn rgb(c: Color32) -> [u8; 3] {
 
 impl Ui {
     pub fn new() -> Ui {
-        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark(), chord: None }
+        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark(), chord: None, shot: None }
     }
 
     pub fn show(&mut self, panel: Panel) {
@@ -93,6 +95,7 @@ impl Ui {
 
     pub fn settings_changed(&mut self, _c: &Config) {
         self.chord = None;
+        self.shot = None;
         self.look = None;
         self.dirty = true;
     }
@@ -108,6 +111,7 @@ impl Ui {
         self.live = new;
         self.dark = dark;
         self.chord = None;
+        self.shot = None;
         self.look = None;
         self.dirty = true;
         true
@@ -189,6 +193,21 @@ impl Ui {
         (buffer, size)
     }
 
+    /// The note at the foot of the screen while a screenshot is chosen.
+    pub fn shot_buffer(&mut self, c: &Config, screen: (i32, i32), view: &crate::shot::View) -> (MemoryRenderBuffer, (i32, i32)) {
+        let size = ((560).min(screen.0 - 40).max(160), (176).min(screen.1 - 40).max(80));
+        if let Some((v, b, s)) = &self.shot
+            && v == view
+            && *s == size
+        {
+            return (b.clone(), *s);
+        }
+        let pixels = self.paint_with(c, size, |ui| shot(ui, view));
+        let buffer = MemoryRenderBuffer::from_slice(&pixels, Fourcc::Abgr8888, size, 1, Transform::Normal, None);
+        self.shot = Some((view.clone(), buffer.clone(), size));
+        (buffer, size)
+    }
+
     fn paint(&mut self, c: &Config, mod_is_alt: bool, size: (i32, i32), mut picker: Option<&mut crate::picker::Picker>) -> Vec<u8> {
         let panel = self.panel;
         self.paint_with(c, size, |ui| {
@@ -257,6 +276,35 @@ impl Ui {
         soft::draw(&mut buf, w, h, soft::Order::Rgba, &prims, &self.tex, 1.0);
         buf
     }
+}
+
+fn shot(ui: &mut egui::Ui, view: &crate::shot::View) {
+    ui.horizontal(|ui| {
+        ui.heading("Screenshot");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match view.size {
+            Some((w, h)) => ui.weak(format!("{w} by {h}")),
+            None => ui.weak("The whole screen"),
+        });
+    });
+    ui.add_space(4.0);
+    ui.weak("Drag out an area, or click a window.");
+    ui.add_space(12.0);
+    let pair = |ui: &mut egui::Ui, key: &str, what: &str| {
+        key_cap(ui, key);
+        ui.label(what);
+        ui.add_space(14.0);
+    };
+    ui.horizontal(|ui| {
+        pair(ui, "Enter", "Save and copy");
+        pair(ui, "Ctrl+C", "Copy only");
+        pair(ui, "Esc", "Cancel");
+    });
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        pair(ui, "S", "Whole screen");
+        pair(ui, "W", "Window");
+        pair(ui, "P", if view.pointer { "Pointer: in the picture" } else { "Pointer: left out" });
+    });
 }
 
 fn key_cap(ui: &mut egui::Ui, text: &str) {

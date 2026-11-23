@@ -42,8 +42,8 @@ doesn't answer that request yet: there, Mod+Shift+Escape does it by hand.
 Mod+Shift+/ shows every key. The ones to know first: Mod+Return a terminal, Mod+Space the
 launcher, Mod+Q close, Mod+arrows move the focus, Mod+Ctrl+arrows move the window, Mod+R the
 next column width, Mod+Shift+Minus and Mod+Shift+Equal a shorter or taller window (it sits in
-the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces, Mod+Shift+S puts a
-window away in the scratchpad and Mod+S shows it floating over whatever is in view (and puts
+the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces, Mod+Shift+` puts a
+window away in the scratchpad and Mod+` shows it floating over whatever is in view (and puts
 it away again),
 Mod+Shift+E leave.
 
@@ -140,7 +140,7 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `chord_panel`,
 `chord_vim`, `xwayland`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
-`natural_scroll`, `cursor_theme`, `cursor_size`. `softcore settings` says what each is.
+`natural_scroll`, `cursor_theme`, `cursor_size`, `screenshot_dir`. `softcore settings` says what each is.
 
 A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
@@ -256,7 +256,7 @@ bind.Mod+Shift+N=move-window-to-scratchpad term
 ```
 
 Each named scratchpad has its own key and its own windows; the scratchpad without a name
-(`Mod+S`) is separate from them all. `app-id=` and `title=` say which windows go into it as
+(``Mod+` ``) is separate from them all. `app-id=` and `title=` say which windows go into it as
 they open. `command=` is run when it is asked for and holds nothing, and the window is shown
 as soon as it opens, so one key starts the program the first time and shows and hides it
 after that. `size=` is how much of the screen its window takes, in place of
@@ -413,6 +413,31 @@ everything is blurred, windows included, and made again only when something unde
 changed. A surface named in `blur_layers` is blurred behind all of its rectangle, so name
 only ones that fill theirs: none are named by default, since Rivet Shell's panel and dock
 are see-through around their bars and a blurred band would cover the windows under them.
+
+## Screenshots
+
+Print, or Mod+S (`screenshot`), dims the screen and waits to be told what the picture is of.
+Drag out an area with the pointer, or click a window for an area that is exactly that
+window, then press Enter. With nothing chosen, Enter takes the whole display.
+
+| Key | What it does |
+| --- | --- |
+| Enter, Space | Saves the picture and puts it on the clipboard. |
+| Ctrl+C | Puts it on the clipboard without saving. |
+| S | The whole display the pointer is on, at once. |
+| W | The window under the pointer (or the focused one), at once, without its border. |
+| P | Whether the pointer is in the picture. It is left out unless asked for. |
+| Escape, another button | Stops without a picture. |
+
+Softcore draws this itself, so it works over an open menu or a full-screen window, the
+windows hear nothing from the pointer or the keys meanwhile, and none of it is in the
+picture. Ctrl+Print (`screenshot-screen`) and Alt+Print (`screenshot-window`) take the
+display and the focused window without asking.
+
+A picture is saved as `Screenshot from 2026-11-23 10-22-33.png` in `Pictures/Screenshots`,
+or in the folder `screenshot_dir` names, and a notification says where (through
+`notify-send`). `screenshot-screen FILE` and `softcore msg screenshot FILE` save to that
+file and do nothing else, for scripts.
 
 ## Talking to it
 
