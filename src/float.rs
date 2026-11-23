@@ -1,6 +1,8 @@
-//! Floating windows moved and resized: with the pointer (Mod and the left button moves, Mod
-//! and the right button resizes from the nearest corner; a window's own title bar and edges
-//! work too, when it has them), and with the keys that move and size columns.
+//! Windows moved and resized with the pointer. Mod and the left button moves a floating
+//! window, or picks one of the columns up; Mod and the right button resizes a floating
+//! window from the nearest corner, or makes a column wider or narrower. A floating window's
+//! own title bar and edges work too, when it has them, and so do the keys that move and
+//! size columns.
 
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, MotionEvent};
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -25,6 +27,9 @@ pub struct Drag {
     /// was when picked up, and, once it has been carried a little way, where it would go
     /// if let go of now and the mark that shows it (on the display named).
     pub tiled: Option<Tile>,
+    /// A column being made wider or narrower (a row taller or shorter, where the strip runs
+    /// down): how wide it was, how many pixels the whole screen is, and whether it runs down.
+    column: Option<(f64, f64, bool)>,
     pub spot: Option<(Spot, String, Rect)>,
     pub mark: crate::render::Deco,
     pub mark_id: smithay::backend::renderer::element::Id,
@@ -115,13 +120,22 @@ fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool, hold: 
 pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, bool)>, quiet: bool) -> bool {
     let from = state.pointer_pos;
     let Some((rect, _)) = place(state, id) else {
+        // A window of the columns, by the right button: its column is made wider or narrower
+        // as the pointer goes along the strip.
+        if resize {
+            let Some(column) = state.layout.column_width_of(id).filter(|_| !state.overview.on && !state.layout.is_floating(id)) else { return false };
+            state.cursor_status = CursorImageStatus::Named(if column.2 { CursorIcon::NsResize } else { CursorIcon::EwResize });
+            state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+            state.queue_redraw();
+            return true;
+        }
         // A window of the columns: picked up, to be put down at another place among them.
         let tile = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).and_then(|o| {
             let origin = State::output_geometry(o).loc;
             state.tiles(o).into_iter().find(|t| t.id == id && !t.floating && !t.fullscreen && !t.hidden).map(|t| (t, Rect::new(t.rect.x + origin.x, t.rect.y + origin.y, t.rect.w, t.rect.h)))
         });
         let Some((tile, rect)) = tile.filter(|_| !resize && !state.overview.on) else { return false };
-        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), column: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
         return true;
     };
     let resize = resize.then(|| {
@@ -137,7 +151,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
         Some((true, false)) => CursorIcon::SwResize,
         Some((false, false)) => CursorIcon::SeResize,
     });
-    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, column: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
     state.queue_redraw();
     true
 }
@@ -146,6 +160,11 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
 pub fn moved(state: &mut State) {
     let Some(d) = &state.drag else { return };
     let (id, r, resize) = (d.id, d.rect, d.resize);
+    if let Some((was, whole, down)) = d.column {
+        let by = if down { state.pointer_pos.y - d.from.y } else { state.pointer_pos.x - d.from.x };
+        state.layout.set_column_width_of(id, was + by / whole);
+        return;
+    }
     if d.tiled.is_some() {
         let far = (state.pointer_pos.x - d.from.x).hypot(state.pointer_pos.y - d.from.y) >= CARRY;
         if d.spot.is_some() || far {

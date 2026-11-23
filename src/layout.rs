@@ -899,6 +899,29 @@ impl Layout {
         self.settle();
     }
 
+    /// The column a window is in: how wide it is (a part of the screen along the strip), how
+    /// many pixels the whole of that is, and whether the strip runs down. None for a window
+    /// that isn't in a column.
+    pub fn column_width_of(&self, id: WinId) -> Option<(f64, f64, bool)> {
+        let (mi, wi) = self.find(id)?;
+        let m = &self.mons[mi];
+        let ws = &m.wss[wi];
+        let c = ws.cols.iter().find(|c| c.wins.contains(&id))?;
+        let vertical = m.ws_vertical(ws, &self.opts);
+        let along = if vertical { m.area.h } else { m.area.w };
+        let whole = (along - 2 * self.opts.gaps_out + self.opts.gaps).max(1) as f64;
+        Some((if c.maximized { 1.0 } else { c.width }, whole, vertical))
+    }
+
+    /// Make the column a window is in this wide, wherever the focus is.
+    pub fn set_column_width_of(&mut self, id: WinId, to: f64) {
+        let Some((mi, wi)) = self.find(id) else { return };
+        let Some(c) = self.mons[mi].wss[wi].cols.iter_mut().find(|c| c.wins.contains(&id)) else { return };
+        c.maximized = false;
+        c.width = to.clamp(0.1, 1.0);
+        self.settle();
+    }
+
     /// Give the focused window a height of its own: a part of the column's height, or
     /// (`by`) that much more or less than it has now. None: back to sharing the room.
     pub fn set_height(&mut self, to: Option<f64>, by: bool) {
@@ -2024,6 +2047,25 @@ mod tests {
         // Its line goes: it is a workspace like any other, and goes when it is empty.
         l.set_named_workspaces(&[("mail".into(), Some("B".into()), None)]);
         assert_eq!(names(&l, 0), vec![None]);
+    }
+
+    #[test]
+    fn a_column_is_sized_by_its_window_whichever_has_the_focus() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        let (was, whole, down) = l.column_width_of(1).unwrap();
+        assert!(!down && whole > 0.0);
+        // 100 pixels wider, as the pointer would ask.
+        l.set_column_width_of(1, was + 100.0 / whole);
+        let (now, ..) = l.column_width_of(1).unwrap();
+        assert!(((now - was) * whole - 100.0).abs() < 1e-6);
+        assert_eq!(l.column_width_of(2).unwrap().0, was);
+        assert_eq!(l.active_window(), Some(2));
+        // Never narrower than a tenth, nor wider than the screen.
+        l.set_column_width_of(1, -3.0);
+        assert_eq!(l.column_width_of(1).unwrap().0, 0.1);
+        assert!(l.column_width_of(99).is_none());
     }
 
     #[test]

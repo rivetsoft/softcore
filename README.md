@@ -295,6 +295,11 @@ window's column (which adds a tab to a tabbed one). The outer quarters of a colu
 the bar, the middle for a place in it. On another display it goes to the workspace in view
 there. Let go where it started, or before it has gone anywhere, and nothing moves.
 
+Mod and the right button makes a column wider or narrower as the pointer goes left and
+right, from wherever on the window it was pressed. Where windows scroll up and down it is
+the row's height, and the pointer goes up and down. On a floating window it resizes the
+window from the nearest corner.
+
 ## Full screen
 
 Mod+Shift+F (`fullscreen-window`) gives the focused window the whole display, over the
