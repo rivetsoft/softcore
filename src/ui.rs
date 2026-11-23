@@ -195,7 +195,7 @@ impl Ui {
 
     /// The note at the foot of the screen while a screenshot is chosen.
     pub fn shot_buffer(&mut self, c: &Config, screen: (i32, i32), view: &crate::shot::View) -> (MemoryRenderBuffer, (i32, i32)) {
-        let size = ((560).min(screen.0 - 40).max(160), (176).min(screen.1 - 40).max(80));
+        let size = ((if view.size.is_some() { 400 } else { 318 }).min(screen.0 - 40).max(160), 66);
         if let Some((v, b, s)) = &self.shot
             && v == view
             && *s == size
@@ -279,31 +279,15 @@ impl Ui {
 }
 
 fn shot(ui: &mut egui::Ui, view: &crate::shot::View) {
-    ui.horizontal(|ui| {
-        ui.heading("Screenshot");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match view.size {
-            Some((w, h)) => ui.weak(format!("{w} by {h}")),
-            None => ui.weak("The whole screen"),
-        });
-    });
-    ui.add_space(4.0);
-    ui.weak("Drag out an area, or click a window.");
-    ui.add_space(12.0);
-    let pair = |ui: &mut egui::Ui, key: &str, what: &str| {
-        key_cap(ui, key);
-        ui.label(what);
-        ui.add_space(14.0);
-    };
-    ui.horizontal(|ui| {
-        pair(ui, "Enter", "Save and copy");
-        pair(ui, "Ctrl+C", "Copy only");
-        pair(ui, "Esc", "Cancel");
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        pair(ui, "S", "Whole screen");
-        pair(ui, "W", "Window");
-        pair(ui, "P", if view.pointer { "Pointer: in the picture" } else { "Pointer: left out" });
+    ui.horizontal_centered(|ui| {
+        for (key, what) in [("Enter", "Save"), ("Ctrl+C", "Copy"), ("Esc", "Cancel")] {
+            key_cap(ui, key);
+            ui.label(what);
+            ui.add_space(10.0);
+        }
+        if let Some((w, h)) = view.size {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.weak(format!("{w} × {h}")));
+        }
     });
 }
 
