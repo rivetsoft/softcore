@@ -196,7 +196,7 @@ impl Ui {
     /// The keys that finish a screenshot and the size of the area chosen, in one row at the
     /// foot of the screen.
     pub fn shot_buffer(&mut self, c: &Config, screen: (i32, i32), view: &crate::shot::View) -> (MemoryRenderBuffer, (i32, i32)) {
-        let wide = 318 + if view.edit { 70 } else { 0 } + if view.size.is_some() { 82 } else { 0 };
+        let wide = 318 + if view.edit { 86 } else { 0 } + if view.size.is_some() { 82 } else { 0 };
         let size = (wide.min(screen.0 - 40).max(160), 66);
         if let Some((v, b, s)) = &self.shot
             && v == view
