@@ -239,13 +239,14 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     let here = sh.output == output.name();
     let area = sh.area.filter(|_| here);
     let ids = sh.ids.clone();
-    if here {
+    // The area's size, once there is one. Nothing else is written on the screen.
+    if here && area.is_some() {
         let px = area.map(|r| {
             let p: Rectangle<i32, Physical> = r.to_physical_precise_round(scale);
             (p.size.w, p.size.h)
         });
         let view = View { size: px, pointer: sh.pointer };
-        let (buffer, (w, h)) = state.ui.shot_buffer(&state.config, (size.w, size.h), &view);
+        let (buffer, (w, h)) = state.ui.shot_buffer(&state.config, &view);
         let loc = Point::<i32, Logical>::from(((size.w - w) / 2, (size.h - h - 48).max(0))).to_f64().to_physical(scale);
         if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &buffer, None, None, None, Kind::Unspecified) {
             out.push(Elem::Memory(e));

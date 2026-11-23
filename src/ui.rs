@@ -193,9 +193,9 @@ impl Ui {
         (buffer, size)
     }
 
-    /// The note at the foot of the screen while a screenshot is chosen.
-    pub fn shot_buffer(&mut self, c: &Config, screen: (i32, i32), view: &crate::shot::View) -> (MemoryRenderBuffer, (i32, i32)) {
-        let size = ((if view.size.is_some() { 400 } else { 318 }).min(screen.0 - 40).max(160), 66);
+    /// The size of the area chosen for a screenshot, at the foot of the screen.
+    pub fn shot_buffer(&mut self, c: &Config, view: &crate::shot::View) -> (MemoryRenderBuffer, (i32, i32)) {
+        let size = (150, 58);
         if let Some((v, b, s)) = &self.shot
             && v == view
             && *s == size
@@ -279,16 +279,9 @@ impl Ui {
 }
 
 fn shot(ui: &mut egui::Ui, view: &crate::shot::View) {
-    ui.horizontal_centered(|ui| {
-        for (key, what) in [("Enter", "Save"), ("Ctrl+C", "Copy"), ("Esc", "Cancel")] {
-            key_cap(ui, key);
-            ui.label(what);
-            ui.add_space(10.0);
-        }
-        if let Some((w, h)) = view.size {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.weak(format!("{w} × {h}")));
-        }
-    });
+    if let Some((w, h)) = view.size {
+        ui.centered_and_justified(|ui| ui.label(format!("{w} × {h}")));
+    }
 }
 
 fn key_cap(ui: &mut egui::Ui, text: &str) {
