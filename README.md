@@ -445,6 +445,7 @@ file and do nothing else, for scripts.
 `screenshot_edit` is the program E opens the picture in, with the file added to the end of
 it: `rivet-snip --replace` unless you say otherwise (`swappy -f`, say), and empty for none.
 What is saved there replaces the screenshot.
+Where that program isn't installed, E does nothing.
 
 ## Talking to it
 

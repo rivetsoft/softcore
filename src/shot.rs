@@ -160,7 +160,7 @@ pub fn key(state: &mut State, mods: &ModifiersState, sym: Keysym) {
                 finish(state, Some(What::Window(id)), true, false);
             }
         }
-        Keysym::e if !state.config.screenshot_edit.trim().is_empty() => finish(state, None, true, true),
+        Keysym::e if installed(&state.config.screenshot_edit) => finish(state, None, true, true),
         Keysym::p => {
             if let Some(sh) = &mut state.shooter {
                 sh.pointer = !sh.pointer;
@@ -293,6 +293,15 @@ fn quoted(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Whether a command's program can be found: a path that is there, or a name on PATH.
+fn installed(command: &str) -> bool {
+    let Some(program) = command.split_whitespace().next() else { return false };
+    if program.contains('/') {
+        return std::path::Path::new(program).exists();
+    }
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+}
+
 /// Take a picture, now that a frame without the dimming has been drawn.
 pub fn take(state: &mut State, renderer: &mut GlesRenderer, wanted: Wanted) {
     let source = match &wanted.what {
@@ -327,9 +336,13 @@ pub fn take(state: &mut State, renderer: &mut GlesRenderer, wanted: Wanted) {
     }
     let seat = state.seat.clone();
     set_data_device_selection(&state.dh, &seat, vec!["image/png".into()], Arc::from(bytes));
-    // Marked up next: the program's own window says where the picture is.
-    if let (true, Some(file)) = (wanted.edit, &saved) {
-        state.spawn(&format!("{} {}", state.config.screenshot_edit.trim(), quoted(&file.display().to_string())));
+    // Marked up next: the program's own window says where the picture is. Where the program
+    // isn't there, the picture is saved and copied all the same, and the note says so.
+    let editor = state.config.screenshot_edit.trim().to_string();
+    if let (true, Some(file)) = (wanted.edit, &saved)
+        && installed(&editor)
+    {
+        state.spawn(&format!("{editor} {}", quoted(&file.display().to_string())));
         return;
     }
     let note = match &saved {
