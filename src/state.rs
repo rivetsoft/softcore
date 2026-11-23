@@ -959,14 +959,14 @@ impl State {
             }
             Action::ScreenshotScreen(file) => {
                 if let Some(o) = self.active_output().map(|o| o.name()) {
-                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Screen(o), file: file.map(PathBuf::from), pointer: false, save: true });
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Screen(o), file: file.map(PathBuf::from), pointer: false, save: true, edit: false });
                 }
                 self.queue_redraw();
                 return;
             }
             Action::ScreenshotWindow(file) => {
                 if let Some(id) = self.layout.active_window() {
-                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Window(id), file: file.map(PathBuf::from), pointer: false, save: true });
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Window(id), file: file.map(PathBuf::from), pointer: false, save: true, edit: false });
                 }
                 self.queue_redraw();
                 return;

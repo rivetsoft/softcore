@@ -142,7 +142,7 @@ The plain settings: `gaps`, `gaps_out`, `border`, `radius`, `border_active`,
 `accent`, `follow_desktop_colors`, `background`, `mod`, `default_binds`, `chord_panel`,
 `chord_vim`, `xwayland`, `xkb_layout`,
 `xkb_variant`, `xkb_options`, `repeat_delay`, `repeat_rate`, `tap_to_click`,
-`natural_scroll`, `cursor_theme`, `cursor_size`, `screenshot_dir`. `softcore settings` says what each is.
+`natural_scroll`, `cursor_theme`, `cursor_size`, `screenshot_dir`, `screenshot_edit`. `softcore settings` says what each is.
 
 A binding's value is an action, named as niri names them (`focus-column-left`,
 `move-column-to-workspace 3`, `set-column-width +10%`, `set-window-height 60%`, …), with `allow-when-locked` before it
@@ -426,6 +426,7 @@ window, then press Enter. With nothing chosen, Enter takes the whole display.
 | --- | --- |
 | Enter, Space | Saves the picture and puts it on the clipboard. |
 | Ctrl+C | Puts it on the clipboard without saving. |
+| E | Saves it and opens it in Rivet Snip, to clip and mark up. |
 | S | The whole display the pointer is on, at once. |
 | W | The window under the pointer (or the focused one), at once, without its border. |
 | P | Whether the pointer is in the picture. It is left out unless asked for. |
@@ -440,6 +441,10 @@ A picture is saved as `Screenshot from 2026-11-23 10-22-33.png` in `Pictures/Scr
 or in the folder `screenshot_dir` names, and a notification says where (through
 `notify-send`). `screenshot-screen FILE` and `softcore msg screenshot FILE` save to that
 file and do nothing else, for scripts.
+
+`screenshot_edit` is the program E opens the picture in, with the file added to the end of
+it: `rivet-snip --replace` unless you say otherwise (`swappy -f`, say), and empty for none.
+What is saved there replaces the screenshot.
 
 ## Talking to it
 

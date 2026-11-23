@@ -54,6 +54,8 @@ pub struct Wanted {
     pub file: Option<PathBuf>,
     pub pointer: bool,
     pub save: bool,
+    /// Opened afterwards in the program that marks pictures up (`screenshot_edit`).
+    pub edit: bool,
 }
 
 /// What the note at the foot of the screen says.
@@ -132,13 +134,13 @@ pub fn close(state: &mut State) {
 }
 
 /// Take the picture chosen, and stop choosing.
-fn finish(state: &mut State, what: Option<What>, save: bool) {
+fn finish(state: &mut State, what: Option<What>, save: bool, edit: bool) {
     let Some(sh) = state.shooter.take() else { return };
     let what = what.unwrap_or(match sh.area {
         Some(r) => What::Area(sh.output, r),
         None => What::Screen(sh.output),
     });
-    state.screenshot = Some(Wanted { what, file: None, pointer: sh.pointer, save });
+    state.screenshot = Some(Wanted { what, file: None, pointer: sh.pointer, save, edit });
     state.queue_redraw();
 }
 
@@ -147,17 +149,18 @@ pub fn key(state: &mut State, mods: &ModifiersState, sym: Keysym) {
     let Some(on) = state.shooter.as_ref().map(|sh| sh.output.clone()) else { return };
     match sym {
         Keysym::Escape => close(state),
-        Keysym::Return | Keysym::KP_Enter | Keysym::space => finish(state, None, true),
-        Keysym::c if mods.ctrl => finish(state, None, false),
+        Keysym::Return | Keysym::KP_Enter | Keysym::space => finish(state, None, true, false),
+        Keysym::c if mods.ctrl => finish(state, None, false, false),
         Keysym::s => {
             let output = state.output_at(state.pointer_pos).map(|o| o.name()).unwrap_or(on);
-            finish(state, Some(What::Screen(output)), true);
+            finish(state, Some(What::Screen(output)), true, false);
         }
         Keysym::w => {
             if let Some(id) = state.window_under(state.pointer_pos).or(state.layout.active_window()) {
-                finish(state, Some(What::Window(id)), true);
+                finish(state, Some(What::Window(id)), true, false);
             }
         }
+        Keysym::e if !state.config.screenshot_edit.trim().is_empty() => finish(state, None, true, true),
         Keysym::p => {
             if let Some(sh) = &mut state.shooter {
                 sh.pointer = !sh.pointer;
@@ -324,6 +327,11 @@ pub fn take(state: &mut State, renderer: &mut GlesRenderer, wanted: Wanted) {
     }
     let seat = state.seat.clone();
     set_data_device_selection(&state.dh, &seat, vec!["image/png".into()], Arc::from(bytes));
+    // Marked up next: the program's own window says where the picture is.
+    if let (true, Some(file)) = (wanted.edit, &saved) {
+        state.spawn(&format!("{} {}", state.config.screenshot_edit.trim(), quoted(&file.display().to_string())));
+        return;
+    }
     let note = match &saved {
         Some(file) => format!("notify-send -a Softcore -i {} 'Screenshot saved' {}", quoted(&file.display().to_string()), quoted(&format!("{}, and on the clipboard", file.display()))),
         None if wanted.save => "notify-send -a Softcore 'Screenshot copied' 'It couldn'\\''t be saved, but it is on the clipboard'".to_string(),
