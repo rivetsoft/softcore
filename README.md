@@ -323,9 +323,12 @@ the bar, the middle for a place in it. On another display it goes to the workspa
 there. Let go where it started, or before it has gone anywhere, and nothing moves.
 
 Mod and the right button makes a column wider or narrower as the pointer goes left and
-right, from wherever on the window it was pressed. Where windows scroll up and down it is
-the row's height, and the pointer goes up and down. On a floating window it resizes the
-window from the nearest corner.
+right. The edge nearer to where it was pressed is the one that follows the pointer: pressed
+on the left half of the window, the left edge moves and the right one (and every column
+after it) stays where it is, as far as the strip can be scrolled to allow that. Where
+windows scroll up and down it is the row's height, the pointer goes up and down, and the
+edges are the top and the bottom. On a floating window it resizes the window from the
+nearest corner.
 
 ## Full screen
 

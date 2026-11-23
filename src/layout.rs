@@ -913,12 +913,26 @@ impl Layout {
         Some((if c.maximized { 1.0 } else { c.width }, whole, vertical))
     }
 
-    /// Make the column a window is in this wide, wherever the focus is.
-    pub fn set_column_width_of(&mut self, id: WinId, to: f64) {
+    /// Make the column a window is in this wide, wherever the focus is. `from_start`: its far
+    /// edge (the right, or the bottom) stays where it is on the screen and the near one
+    /// moves, as far as the strip can be scrolled to allow it.
+    pub fn set_column_width_of(&mut self, id: WinId, to: f64, from_start: bool) {
         let Some((mi, wi)) = self.find(id) else { return };
-        let Some(c) = self.mons[mi].wss[wi].cols.iter_mut().find(|c| c.wins.contains(&id)) else { return };
-        c.maximized = false;
-        c.width = to.clamp(0.1, 1.0);
+        let o = self.opts.clone();
+        let m = &mut self.mons[mi];
+        let area = m.strip_area(m.ws_vertical(&m.wss[wi], &o));
+        let ws = &mut m.wss[wi];
+        let Some(ci) = ws.cols.iter().position(|c| c.wins.contains(&id)) else { return };
+        let was = ws.col_width(ci, &area, &o);
+        ws.cols[ci].maximized = false;
+        ws.cols[ci].width = to.clamp(0.1, 1.0);
+        if from_start {
+            // The strip is scrolled by as much as the column grew, so what is after it stays put.
+            let last = ws.cols.len() - 1;
+            let end = (ws.col_x(last, &area, &o) + ws.col_width(last, &area, &o)) as f64;
+            let room = (area.w - 2 * o.gaps_out) as f64;
+            ws.view_to = (ws.view_to + (ws.col_width(ci, &area, &o) - was) as f64).clamp(0.0, (end - room).max(0.0));
+        }
         self.settle();
     }
 
@@ -2057,15 +2071,41 @@ mod tests {
         let (was, whole, down) = l.column_width_of(1).unwrap();
         assert!(!down && whole > 0.0);
         // 100 pixels wider, as the pointer would ask.
-        l.set_column_width_of(1, was + 100.0 / whole);
+        l.set_column_width_of(1, was + 100.0 / whole, false);
         let (now, ..) = l.column_width_of(1).unwrap();
         assert!(((now - was) * whole - 100.0).abs() < 1e-6);
         assert_eq!(l.column_width_of(2).unwrap().0, was);
         assert_eq!(l.active_window(), Some(2));
         // Never narrower than a tenth, nor wider than the screen.
-        l.set_column_width_of(1, -3.0);
+        l.set_column_width_of(1, -3.0, false);
         assert_eq!(l.column_width_of(1).unwrap().0, 0.1);
         assert!(l.column_width_of(99).is_none());
+    }
+
+    #[test]
+    fn a_column_sized_from_its_near_edge_keeps_what_is_after_it_in_place() {
+        let mut l = layout();
+        for id in 1..=4 {
+            l.add_window(id, false, None);
+        }
+        l.finish_animations();
+        let at = |l: &Layout, id| l.tiles(0, &|_| (1, 1)).into_iter().find(|t| t.id == id).unwrap().rect;
+        let (two, three) = (at(&l, 3), at(&l, 4));
+        let (was, whole, _) = l.column_width_of(3).unwrap();
+        l.set_column_width_of(3, was + 100.0 / whole, true);
+        l.finish_animations();
+        // Its left edge went left; its right edge and the column after it are where they were.
+        assert_eq!((at(&l, 3).x, at(&l, 3).w), (two.x - 100, two.w + 100));
+        assert_eq!(at(&l, 4), three);
+        // With nothing scrolled off before it there is nowhere for the edge to go: the far one moves.
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.finish_animations();
+        let one = at(&l, 1);
+        l.set_column_width_of(1, was - 100.0 / whole, true);
+        l.finish_animations();
+        assert_eq!((at(&l, 1).x, at(&l, 1).w), (one.x, one.w - 100));
     }
 
     #[test]

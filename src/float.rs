@@ -28,8 +28,9 @@ pub struct Drag {
     /// if let go of now and the mark that shows it (on the display named).
     pub tiled: Option<Tile>,
     /// A column being made wider or narrower (a row taller or shorter, where the strip runs
-    /// down): how wide it was, how many pixels the whole screen is, and whether it runs down.
-    column: Option<(f64, f64, bool)>,
+    /// down): how wide it was, how many pixels the whole screen is, and whether it runs down,
+    /// and whether it is the near edge (the left, or the top) that follows the pointer.
+    column: Option<(f64, f64, bool, bool)>,
     pub spot: Option<(Spot, String, Rect)>,
     pub mark: crate::render::Deco,
     pub mark_id: smithay::backend::renderer::element::Id,
@@ -123,7 +124,14 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
         // A window of the columns, by the right button: its column is made wider or narrower
         // as the pointer goes along the strip.
         if resize {
-            let Some(column) = state.layout.column_width_of(id).filter(|_| !state.overview.on && !state.layout.is_floating(id)) else { return false };
+            let Some((was, whole, down)) = state.layout.column_width_of(id).filter(|_| !state.overview.on && !state.layout.is_floating(id)) else { return false };
+            // The edge nearer the pointer is the one that moves.
+            let near = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).and_then(|o| {
+                let origin = State::output_geometry(o).loc;
+                let r = state.tiles(o).into_iter().find(|t| t.id == id)?.rect;
+                Some(if down { from.y < (origin.y + r.y) as f64 + r.h as f64 / 2.0 } else { from.x < (origin.x + r.x) as f64 + r.w as f64 / 2.0 })
+            });
+            let column = (was, whole, down, near.unwrap_or(false));
             state.cursor_status = CursorImageStatus::Named(if column.2 { CursorIcon::NsResize } else { CursorIcon::EwResize });
             state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
             state.queue_redraw();
@@ -160,9 +168,9 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
 pub fn moved(state: &mut State) {
     let Some(d) = &state.drag else { return };
     let (id, r, resize) = (d.id, d.rect, d.resize);
-    if let Some((was, whole, down)) = d.column {
+    if let Some((was, whole, down, near)) = d.column {
         let by = if down { state.pointer_pos.y - d.from.y } else { state.pointer_pos.x - d.from.x };
-        state.layout.set_column_width_of(id, was + by / whole);
+        state.layout.set_column_width_of(id, was + if near { -by } else { by } / whole, near);
         return;
     }
     if d.tiled.is_some() {
