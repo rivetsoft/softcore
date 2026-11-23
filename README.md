@@ -488,13 +488,23 @@ gst-launch-1.0 pipewiresrc path=NODE ! videoconvert ! autovideosink
 Programs that capture the screen directly (`grim`, and screenshots from a shell) work too,
 through ext-image-copy-capture.
 
-For apps to reach it, three files from `data/` need installing (a package would do this):
+For apps to reach it, and the desktop's file picker, a few files from `data/` have to be
+in place. `softcore install` puts them there for you, and `sudo softcore install --system`
+for everyone, which also adds the entry login managers list:
 
-| File | Where |
-| --- | --- |
-| `softcore.portal` | `/usr/share/xdg-desktop-portal/portals/` or `~/.local/share/xdg-desktop-portal/portals/` |
-| `softcore-portals.conf` | `/usr/share/xdg-desktop-portal/` or `~/.config/xdg-desktop-portal/` |
-| `softcore.desktop` | `/usr/share/wayland-sessions/`, for login managers |
+| File | For you | For everyone |
+| --- | --- | --- |
+| `softcore-session.target` | `~/.config/systemd/user/` | `/usr/lib/systemd/user/` |
+| `softcore.portal` | `~/.local/share/xdg-desktop-portal/portals/` | `/usr/share/xdg-desktop-portal/portals/` |
+| `softcore-portals.conf` | `~/.config/xdg-desktop-portal/` | `/usr/share/xdg-desktop-portal/` |
+| `softcore.desktop` | | `/usr/share/wayland-sessions/` |
+
+The target is what makes the session one to systemd. On displays of its own Softcore tells
+D-Bus and systemd where it is and starts `softcore-session.target`, which brings up
+`graphical-session.target`: xdg-desktop-portal won't start without that, and nor will
+anything else that waits for a graphical session. Softcore stops the target as it leaves.
+Without the files Softcore still runs, and apps that ask the portal for a file picker or
+the screen get no answer.
 
 On displays of its own Softcore runs `softcore portal` itself; in a window, `--portal` does.
 

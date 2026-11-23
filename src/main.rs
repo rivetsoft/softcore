@@ -12,6 +12,7 @@ mod float;
 mod handlers;
 mod host;
 mod input;
+mod install;
 mod ipc;
 mod layout;
 mod overview;
@@ -44,6 +45,7 @@ Usage:
   softcore settings         Show or change settings (softcore settings help)
   softcore portal           The screen-sharing service apps reach through xdg-desktop-portal
   softcore validate         Check the settings file and say what couldn't be read
+  softcore install          Put the session's files in place (the portal's, systemd's)
 
 Options:
   --tty                On displays of its own (the default from a TTY)
@@ -70,6 +72,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("msg") => std::process::exit(ipc::client(&args[1..])),
         Some("portal") => std::process::exit(portal::run()),
+        Some("install") => std::process::exit(install::run(&args[1..])),
         Some("settings") => std::process::exit(settings_cli::run(&args[1..])),
         Some("validate") => {
             let c = config::load();
@@ -166,16 +169,23 @@ fn main() {
     if !state.config.errors.is_empty() {
         state.ui.show(ui::Panel::Errors);
     }
-    // On displays of its own Softcore is the session: tell D-Bus and systemd where it is, so
-    // what they start (the portal, apps) finds it, and run the screen-sharing service.
-    if !state.nested {
-        let display = if state.x11.is_some() { " DISPLAY" } else { "" };
-        state.spawn(&format!("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET{display}"));
-    }
+    // The screen-sharing service first, so it is there when the desktop's portal looks for it.
     if (portal || !state.nested)
         && let Ok(exe) = std::env::current_exe()
     {
         state.spawn(&format!("exec '{}' portal", exe.display().to_string().replace('\'', "'\\''")));
+    }
+    // On displays of its own Softcore is the session. D-Bus and systemd are told where it is,
+    // so what they start (the portal, apps) finds it; then the session's target is started,
+    // which is what the desktop's portal and other session services wait for. A mark says
+    // this Softcore started it, so a second one beside it doesn't end the first's session.
+    let session_mark = (!state.nested).then(|| std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("softcore-session.{}", std::process::id())));
+    if let Some(mark) = &session_mark {
+        let display = if state.x11.is_some() { " DISPLAY" } else { "" };
+        state.spawn(&format!(
+            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET{display}; systemctl --user is-active -q softcore-session.target || {{ systemctl --user start softcore-session.target && : > '{}'; }}",
+            mark.display()
+        ));
     }
     for c in state.config.spawn.clone().iter().chain(&spawn) {
         state.spawn(c);
@@ -201,7 +211,16 @@ fn main() {
         })
         .expect("a timer");
 
-    if let Err(e) = event_loop.run(None, &mut state, |state| state.refresh()) {
+    let ran = event_loop.run(None, &mut state, |state| state.refresh());
+    // The session ends with the Softcore that began it, and systemd forgets where it was.
+    if let Some(mark) = session_mark.filter(|m| m.exists()) {
+        let _ = std::fs::remove_file(&mark);
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("systemctl --user stop softcore-session.target; systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE SOFTCORE_SOCKET DISPLAY")
+            .spawn();
+    }
+    if let Err(e) = ran {
         fail(&format!("Softcore stopped: {e}"));
     }
 }

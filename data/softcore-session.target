@@ -1,0 +1,9 @@
+# What a Softcore session is to systemd. Softcore starts this once it is up and stops it as
+# it leaves, which brings graphical-session.target up and down with it: the desktop's portal
+# and anything else that waits for a graphical session start then.
+[Unit]
+Description=Softcore session
+Documentation=https://github.com/ulinaaron/softcore
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target
