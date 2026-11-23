@@ -40,7 +40,9 @@ bindings, as a remote desktop or a virtual machine does. niri gives them while t
 the focus, and takes them back with its own key (Mod+Escape by default). A Softcore outside
 doesn't answer that request yet: there, Mod+Shift+Escape does it by hand.
 Mod+Shift+/ shows every key. The ones to know first: Mod+Return a terminal, Mod+Space the
-launcher, Mod+Q close, Mod+arrows move the focus, Mod+Ctrl+arrows move the window, Mod+R the
+launcher, Mod+Q close, Mod+arrows move the focus, Mod+Shift+arrows move the window (and with Ctrl
+as well, left and right take it to the next display), Mod+Ctrl+Left and Right go to the
+next display, Mod+R the
 next column width, Mod+Shift+Minus and Mod+Shift+Equal a shorter or taller window (it sits in
 the middle of the height; Mod+Ctrl+R gives it all the height back), Mod+F a column as wide as the screen, Mod+Page Up and Down the workspaces, Mod+Shift+` puts a
 window away in the scratchpad and Mod+` shows it floating over whatever is in view (and puts
@@ -377,7 +379,7 @@ it back. A floating window starts in the middle at the size it chose, and from t
 
 - Mod and the left button moves it, Mod and the right button resizes it from the nearest
   corner. Its own title bar and edges work too, when it draws them.
-- The keys that move and size columns do the same to it: Mod+Ctrl+arrows move it,
+- The keys that move and size columns do the same to it: Mod+Shift+arrows move it,
   Mod+Minus and Mod+Equal its width, Mod+Shift+Minus and Mod+Shift+Equal its height,
   Mod+C back to the middle, Mod+Ctrl+R back to the size it chooses itself.
 - It stays where it was put, at the size it was given, through being put in a column and

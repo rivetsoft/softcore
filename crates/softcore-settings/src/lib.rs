@@ -482,10 +482,14 @@ Mod+K focus-window-up
 Mod+J focus-window-down
 Mod+Home focus-column-first
 Mod+End focus-column-last
-Mod+Ctrl+Left move-column-left
-Mod+Ctrl+Right move-column-right
-Mod+Ctrl+Up move-window-up
-Mod+Ctrl+Down move-window-down
+Mod+Shift+Left move-column-left
+Mod+Shift+Right move-column-right
+Mod+Shift+Up move-window-up
+Mod+Shift+Down move-window-down
+Mod+Shift+H move-column-left
+Mod+Shift+L move-column-right
+Mod+Shift+K move-window-up
+Mod+Shift+J move-window-down
 Mod+BracketLeft consume-or-expel-window-left
 Mod+BracketRight consume-or-expel-window-right
 Mod+R switch-preset-column-width
@@ -529,8 +533,8 @@ Mod+Ctrl+6 move-column-to-workspace 6
 Mod+Ctrl+7 move-column-to-workspace 7
 Mod+Ctrl+8 move-column-to-workspace 8
 Mod+Ctrl+9 move-column-to-workspace 9
-Mod+Shift+Left focus-monitor-left
-Mod+Shift+Right focus-monitor-right
+Mod+Ctrl+Left focus-monitor-left
+Mod+Ctrl+Right focus-monitor-right
 Mod+Shift+Ctrl+Left move-column-to-monitor-left
 Mod+Shift+Ctrl+Right move-column-to-monitor-right
 Mod+Shift+Slash show-hotkey-overlay
