@@ -1,4 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#c026d3"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="600" fill="#ffffff">S</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- The site's own drawing of Softcore: columns on a strip that runs off both sides. -->
+  <defs>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eb65a6"/>
+      <stop offset="1" stop-color="#b33272"/>
+    </linearGradient>
+    <clipPath id="edge"><rect x="10" y="14" width="108" height="100" rx="16"/></clipPath>
+  </defs>
+  <rect x="10" y="14" width="108" height="100" rx="16" fill="url(#screen)"/>
+  <g clip-path="url(#edge)">
+    <rect x="-6" y="34" width="32" height="60" rx="6" fill="#23101a"/>
+    <rect x="102" y="34" width="32" height="60" rx="6" fill="#23101a"/>
+    <rect x="36" y="28" width="56" height="72" rx="8" fill="#23101a" stroke="#fff270" stroke-width="5"/>
+    <rect x="46" y="40" width="22" height="5" rx="2.5" fill="#3ecf9a"/>
+    <rect x="46" y="51" width="34" height="5" rx="2.5" fill="#e9dee5"/>
+    <rect x="46" y="62" width="26" height="5" rx="2.5" fill="#0084b8"/>
+    <rect x="2" y="44" width="16" height="5" rx="2.5" fill="#d53f8c"/>
+    <rect x="110" y="44" width="16" height="5" rx="2.5" fill="#d53f8c"/>
+  </g>
 </svg>
