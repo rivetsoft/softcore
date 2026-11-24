@@ -3,7 +3,7 @@
 # and anything else that waits for a graphical session start then.
 [Unit]
 Description=Softcore session
-Documentation=https://github.com/ulinaaron/softcore
+Documentation=https://github.com/rivetsoft/softcore
 BindsTo=graphical-session.target
 Wants=graphical-session-pre.target
 After=graphical-session-pre.target
