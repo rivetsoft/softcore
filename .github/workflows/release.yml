@@ -39,12 +39,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The compositor's libraries, as in ci.yml, and what builds libdisplay-info (which Ubuntu
-      # 22.04 doesn't have, and which the release carries inside the program).
+      # The compositor's libraries, as in ci.yml (with libsystemd-dev, which Ubuntu 22.04's libseat
+      # asks pkg-config for), and what builds libdisplay-info (which Ubuntu 22.04 doesn't have,
+      # and which the release carries inside the program).
       - name: Install the compositor's libraries
         run: >
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
-          libseat-dev libinput-dev libudev-dev libgbm-dev libdrm-dev libxkbcommon-dev
+          libseat-dev libsystemd-dev libinput-dev libudev-dev libgbm-dev libdrm-dev libxkbcommon-dev
           libegl-dev libwayland-dev libpipewire-0.3-dev libclang-dev pkg-config
           meson ninja-build hwdata binutils
 
