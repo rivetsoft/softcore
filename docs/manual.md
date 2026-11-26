@@ -475,7 +475,9 @@ display and the focused window without asking.
 A picture is saved as `Screenshot from 2026-11-23 10-22-33.png` in `Pictures/Screenshots`,
 or in the folder `screenshot_dir` names, and a notification says where (through
 `notify-send`). `screenshot-screen FILE` and `softcore msg screenshot FILE` save to that
-file and do nothing else, for scripts.
+file and do nothing else, for scripts. The PNG is made away from the desktop, which never
+waits for it, so the file appears a moment after the command returns; it is written under
+another name first, so a script that waits for it never reads half a picture.
 
 `screenshot_edit` is the program E opens the picture in, with the file added to the end of
 it: `rivet-snip --replace` unless you say otherwise (`swappy -f`, say), and empty for none.
@@ -535,8 +537,10 @@ the screen get no answer.
 
 On displays of its own Softcore runs `softcore portal` itself; in a window, `--portal` does.
 
-Frames are copied through memory, which is simple and works everywhere, and costs more than
-it should on a 4K display: handing the GPU's own buffers to PipeWire is the next step there.
+A stream gets a frame when what it shows changes, at most 30 a second, and one a second
+when nothing does. Frames are copied from the GPU into the stream's memory once, which is
+simple and works everywhere, and still costs more than it should on a 4K display: handing
+the GPU's own buffers to PipeWire is the next step there.
 
 ## X11 programs
 

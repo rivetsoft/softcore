@@ -255,17 +255,20 @@ fn rgb(c: [u8; 3], a: f32) -> [f32; 4] {
 
 impl Deco {
     fn border(&mut self, shaders: &Shaders, key: BorderKey) -> Elem {
+        if let Some((e, k)) = &self.border
+            && *k == key
+        {
+            return Elem::Shader(e.clone());
+        }
         let w = key.width;
         let area = logical(Rect::new(key.rect.x - w, key.rect.y - w, key.rect.w + 2 * w, key.rect.h + 2 * w));
         let turn = (key.angle as f32).to_radians();
         let uniforms = vec![Uniform::new("u_color", rgb(key.color, 1.0)), Uniform::new("u_color2", rgb(key.color2, 1.0)), Uniform::new("u_dir", [turn.sin(), -turn.cos()]), Uniform::new("u_radius", key.radius as f32), Uniform::new("u_width", w as f32), Uniform::new("u_alpha", key.alpha)];
         match &mut self.border {
             Some((e, k)) => {
-                if *k != key {
-                    e.resize(area, None);
-                    e.update_uniforms(uniforms);
-                    *k = key;
-                }
+                e.resize(area, None);
+                e.update_uniforms(uniforms);
+                *k = key;
             }
             None => self.border = Some((PixelShaderElement::new(shaders.border.clone(), area, None, 1.0, uniforms, Kind::Unspecified), key)),
         }
@@ -273,6 +276,11 @@ impl Deco {
     }
 
     fn shadow(&mut self, shaders: &Shaders, key: ShadowKey) -> Elem {
+        if let Some((e, k)) = &self.shadow
+            && *k == key
+        {
+            return Elem::Shader(e.clone());
+        }
         let m = key.size + key.offset.abs();
         let area = logical(Rect::new(key.rect.x - m, key.rect.y - m, key.rect.w + 2 * m, key.rect.h + 2 * m));
         let uniforms = vec![
@@ -285,11 +293,9 @@ impl Deco {
         ];
         match &mut self.shadow {
             Some((e, k)) => {
-                if *k != key {
-                    e.resize(area, None);
-                    e.update_uniforms(uniforms);
-                    *k = key;
-                }
+                e.resize(area, None);
+                e.update_uniforms(uniforms);
+                *k = key;
             }
             None => self.shadow = Some((PixelShaderElement::new(shaders.shadow.clone(), area, None, 1.0, uniforms, Kind::Unspecified), key)),
         }

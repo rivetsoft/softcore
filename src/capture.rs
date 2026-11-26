@@ -34,6 +34,24 @@ pub struct Shot {
     pub h: i32,
 }
 
+impl Shot {
+    /// Nothing is behind the desktop: a picture of it isn't see-through.
+    pub fn make_opaque(&mut self) {
+        for px in self.rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+    }
+}
+
+/// A frame of its own that one source is drawn into again and again (a cast's), kept from one
+/// picture to the next so only what changed is drawn, and nothing when nothing did.
+pub struct Canvas {
+    texture: GlesTexture,
+    tracker: OutputDamageTracker,
+    size: Size<i32, Physical>,
+    scale: f64,
+}
+
 /// What captures need between frames.
 #[derive(Default)]
 pub struct Captures {
@@ -63,9 +81,18 @@ impl State {
     }
 }
 
-/// Draw a source into memory and read it back.
+/// Draw a source into memory and read it back, alpha as drawn (`Shot::make_opaque` for a
+/// picture of the desktop).
 /// `panels`: with Softcore's own panels (a screenshot shows them; a shared screen doesn't).
 pub fn capture(state: &mut State, renderer: &mut GlesRenderer, source: &Source, cursor: bool, panels: bool) -> Option<Shot> {
+    read_back(state, renderer, source, cursor, panels, None, |rgba, w, h| Shot { rgba: rgba.to_vec(), w, h })
+}
+
+/// Draw a source and hand `read` its pixels where the GPU put them, with no copy between:
+/// red, green, blue and alpha as drawn, top row first, rows packed, and the width and height.
+/// With a canvas, only what changed since its last picture is drawn, and when nothing did
+/// `read` isn't called and the answer is None.
+pub fn read_back<R>(state: &mut State, renderer: &mut GlesRenderer, source: &Source, cursor: bool, panels: bool, canvas: Option<&mut Option<Canvas>>, read: impl FnOnce(&[u8], i32, i32) -> R) -> Option<R> {
     let size = state.source_size(source)?;
     let (elements, clear, scale): (Vec<Elem>, [f32; 4], f64) = match source {
         Source::Output(name) => {
@@ -83,26 +110,37 @@ pub fn capture(state: &mut State, renderer: &mut GlesRenderer, source: &Source, 
             (e, [0.0, 0.0, 0.0, 1.0], scale)
         }
     };
-    if state.captures.textures.len() > 6 {
-        state.captures.textures.clear();
-    }
-    let key = (size.w, size.h);
-    if !state.captures.textures.contains_key(&key) {
-        let t: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
-        state.captures.textures.insert(key, t);
-    }
-    let texture = state.captures.textures.get_mut(&key)?;
-    let mut fb = renderer.bind(texture).ok()?;
-    let mut tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
-    tracker.render_output(renderer, &mut fb, 0, &elements, clear).ok()?;
     let region = Rectangle::<i32, Buffer>::from_size((size.w, size.h).into());
-    let mapping = renderer.copy_framebuffer(&fb, region, Fourcc::Abgr8888).ok()?;
-    let mut rgba = renderer.map_texture(&mapping).ok()?.to_vec();
-    // Nothing is behind the desktop: a picture of it isn't see-through.
-    for px in rgba.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    Some(Shot { rgba, w: size.w, h: size.h })
+    let mapping = match canvas {
+        Some(slot) => {
+            if slot.as_ref().is_none_or(|c| c.size != size || c.scale != scale) {
+                let texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
+                *slot = Some(Canvas { texture, tracker: OutputDamageTracker::new(size, scale, Transform::Normal), size, scale });
+            }
+            let c = slot.as_mut()?;
+            let mut fb = renderer.bind(&mut c.texture).ok()?;
+            // The canvas still holds its last picture: what changed is drawn over it.
+            c.tracker.render_output(renderer, &mut fb, 1, &elements, clear).ok()?.damage?;
+            renderer.copy_framebuffer(&fb, region, Fourcc::Abgr8888).ok()?
+        }
+        None => {
+            if state.captures.textures.len() > 6 {
+                state.captures.textures.clear();
+            }
+            let key = (size.w, size.h);
+            if !state.captures.textures.contains_key(&key) {
+                let t: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
+                state.captures.textures.insert(key, t);
+            }
+            let texture = state.captures.textures.get_mut(&key)?;
+            let mut fb = renderer.bind(texture).ok()?;
+            let mut tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
+            tracker.render_output(renderer, &mut fb, 0, &elements, clear).ok()?;
+            renderer.copy_framebuffer(&fb, region, Fourcc::Abgr8888).ok()?
+        }
+    };
+    let pixels = renderer.map_texture(&mapping).ok()?;
+    Some(read(pixels, size.w, size.h))
 }
 
 /// After each frame is drawn: the screenshot asked for, the frames capturing programs wait
@@ -128,31 +166,32 @@ fn source_of(state: &State, source: &ImageCaptureSource) -> Option<Source> {
 }
 
 fn fill_frame(state: &mut State, renderer: &mut GlesRenderer, source: &ImageCaptureSource, cursor: bool, frame: Frame) {
-    let Some(shot) = source_of(state, source).and_then(|s| capture(state, renderer, &s, cursor, false)) else {
-        frame.fail(CaptureFailureReason::Unknown);
-        return;
-    };
     let buffer = frame.buffer();
-    let written = with_buffer_contents_mut(&buffer, |ptr, len, data| {
-        let fits = data.width == shot.w && data.height == shot.h && matches!(data.format, wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888) && (data.offset + data.stride * data.height) as usize <= len;
-        if !fits {
-            return false;
-        }
-        // Safety: the rows written are inside the pool, checked above.
-        let out = unsafe { std::slice::from_raw_parts_mut(ptr.add(data.offset as usize), (data.stride * data.height) as usize) };
-        for y in 0..shot.h as usize {
-            let row = &shot.rgba[y * shot.w as usize * 4..(y + 1) * shot.w as usize * 4];
-            let dst = &mut out[y * data.stride as usize..y * data.stride as usize + shot.w as usize * 4];
-            for (d, s) in dst.chunks_exact_mut(4).zip(row.chunks_exact(4)) {
-                d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
-            }
-        }
-        true
+    // Straight from the GPU's pixels into the program's buffer, turned to BGRA and made
+    // opaque on the way.
+    let written = source_of(state, source).and_then(|s| {
+        read_back(state, renderer, &s, cursor, false, None, |rgba, w, h| {
+            with_buffer_contents_mut(&buffer, |ptr, len, data| {
+                let fits = data.width == w && data.height == h && matches!(data.format, wl_shm::Format::Argb8888 | wl_shm::Format::Xrgb8888) && (data.offset + data.stride * data.height) as usize <= len;
+                if !fits {
+                    return false;
+                }
+                // Safety: the rows written are inside the pool, checked above.
+                let out = unsafe { std::slice::from_raw_parts_mut(ptr.add(data.offset as usize), (data.stride * data.height) as usize) };
+                let row_len = w as usize * 4;
+                for (row, dst) in rgba.chunks_exact(row_len).zip(out.chunks_mut(data.stride as usize)) {
+                    for (d, s) in dst[..row_len].chunks_exact_mut(4).zip(row.chunks_exact(4)) {
+                        d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+                    }
+                }
+                true
+            })
+        })
     });
     match written {
-        Ok(true) => frame.success(Transform::Normal, None, monotonic_now()),
-        Ok(false) => frame.fail(CaptureFailureReason::BufferConstraints),
-        Err(_) => frame.fail(CaptureFailureReason::Unknown),
+        Some(Ok(true)) => frame.success(Transform::Normal, None, monotonic_now()),
+        Some(Ok(false)) => frame.fail(CaptureFailureReason::BufferConstraints),
+        _ => frame.fail(CaptureFailureReason::Unknown),
     }
 }
 

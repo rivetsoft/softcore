@@ -28,10 +28,12 @@ mod workspaces;
 mod xwayland;
 mod ui;
 
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::time::Duration;
 
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::Display;
 
 use crate::state::State;
@@ -194,24 +196,35 @@ fn main() {
     }
 
     // Asked to stop (a kill, Ctrl+C in the terminal it was started from): leave as tidily as
-    // through the leave key, so the sockets it made don't stay behind.
-    static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    // through the leave key, so the sockets it made don't stay behind. The signal handler
+    // only writes to an eventfd, which wakes the loop.
+    static STOP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
     extern "C" fn stop(_: libc::c_int) {
-        STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+        let one = 1u64;
+        unsafe {
+            libc::write(STOP.load(std::sync::atomic::Ordering::Relaxed), (&one as *const u64).cast(), 8);
+        }
     }
+    let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+    if fd < 0 {
+        fail(&format!("couldn't start: {}", std::io::Error::last_os_error()));
+    }
+    // Safety: just made, and owned by nothing else. Kept open as long as the loop is, so a
+    // second signal never writes anywhere else.
+    let fd = unsafe { std::fs::File::from_raw_fd(fd) };
+    STOP.store(fd.as_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+    event_loop
+        .handle()
+        .insert_source(Generic::new(fd, Interest::READ, Mode::Level), |_, fd, state| {
+            let _ = std::io::Read::read(&mut &**fd, &mut [0u8; 8]);
+            state.signal.stop();
+            Ok(PostAction::Continue)
+        })
+        .expect("a stop signal");
     unsafe {
         libc::signal(libc::SIGTERM, stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
         libc::signal(libc::SIGINT, stop as extern "C" fn(libc::c_int) as libc::sighandler_t);
     }
-    event_loop
-        .handle()
-        .insert_source(Timer::from_duration(Duration::from_millis(100)), |_, _, state| {
-            if STOP.load(std::sync::atomic::Ordering::Relaxed) {
-                state.signal.stop();
-            }
-            TimeoutAction::ToDuration(Duration::from_millis(100))
-        })
-        .expect("a timer");
 
     let ran = event_loop.run(None, &mut state, |state| state.refresh());
     // The session ends with the Softcore that began it, and systemd forgets where it was.

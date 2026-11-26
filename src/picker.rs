@@ -33,6 +33,7 @@ pub struct Picker {
     /// Where each item was last drawn, in the panel's own coordinates.
     pub rects: Vec<egui::Rect>,
     owner: UnixStream,
+    _hangup: crate::state::Hangup,
     thumbs_wanted: bool,
 }
 
@@ -64,7 +65,8 @@ pub fn open(state: &mut State, displays: bool, windows: bool, app: String, mut o
         return;
     }
     let _ = owner.set_nonblocking(true);
-    state.picker = Some(Picker { app, items, selected: 0, rects: Vec::new(), owner, thumbs_wanted: true });
+    let hangup = crate::state::Hangup::new(&state.handle, &owner);
+    state.picker = Some(Picker { app, items, selected: 0, rects: Vec::new(), owner, _hangup: hangup, thumbs_wanted: true });
     state.ui.show(Panel::Share);
     state.ui.touch();
     state.queue_redraw();
@@ -150,7 +152,8 @@ pub fn after_draw(state: &mut State, renderer: &mut GlesRenderer) {
     let sources: Vec<Source> = state.picker.as_ref().unwrap().items.iter().map(|i| i.source.clone()).collect();
     let mut thumbs = Vec::new();
     for (n, source) in sources.iter().enumerate() {
-        let thumb = capture(state, renderer, source, false, false).and_then(|shot| {
+        let thumb = capture(state, renderer, source, false, false).and_then(|mut shot| {
+            shot.make_opaque();
             let img = image::RgbaImage::from_raw(shot.w as u32, shot.h as u32, shot.rgba)?;
             let small = image::imageops::thumbnail(&img, 2 * crate::ui::THUMB.0 as u32, 2 * crate::ui::THUMB.1 as u32);
             let small = fit(&img, small);

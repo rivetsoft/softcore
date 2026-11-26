@@ -15,12 +15,12 @@ use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::input::keyboard::{Keysym, ModifiersState};
+use smithay::reexports::calloop::channel;
 use smithay::output::Output;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
 use smithay::wayland::selection::data_device::set_data_device_selection;
 
 use crate::capture::{Shot, Source, capture};
-use crate::config::Config;
 use crate::layout::WinId;
 use crate::render::Elem;
 use crate::state::State;
@@ -92,10 +92,11 @@ pub fn crop(shot: &Shot, r: Rectangle<i32, Physical>) -> Option<Shot> {
     Some(Shot { rgba, w: w as i32, h: h as i32 })
 }
 
-/// Where a picture taken now is saved: `Screenshot from 2026-11-23 10-22-33.png`.
-pub fn default_file(c: &Config) -> PathBuf {
+/// Where a picture taken now is saved: `Screenshot from 2026-11-23 10-22-33.png`, in the
+/// folder the settings name (`screenshot_dir`).
+pub fn default_file(screenshot_dir: &str) -> PathBuf {
     let home = rivet_xdg::places::home();
-    let dir = match c.screenshot_dir.trim() {
+    let dir = match screenshot_dir.trim() {
         "" => home.join("Pictures/Screenshots"),
         d => match d.strip_prefix("~/") {
             Some(rest) => home.join(rest),
@@ -275,18 +276,25 @@ pub fn elements(state: &mut State, renderer: &mut GlesRenderer, output: &Output,
     solid(&ids[7], x + w, y, size.w - x - w, h, dim, scale, out);
 }
 
-fn png(shot: &Shot) -> Result<Vec<u8>, String> {
-    let img = image::RgbaImage::from_raw(shot.w as u32, shot.h as u32, shot.rgba.clone()).ok_or("the frame was an unexpected size")?;
+fn png(shot: Shot) -> Result<Vec<u8>, String> {
+    let img = image::RgbaImage::from_raw(shot.w as u32, shot.h as u32, shot.rgba).ok_or("the frame was an unexpected size")?;
     let mut bytes = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|e| format!("couldn't make the picture: {e}"))?;
     Ok(bytes)
 }
 
+/// Written beside under another name first, so the file is never there half written.
 fn write(file: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    std::fs::File::create(file).and_then(|mut f| f.write_all(bytes)).map_err(|e| format!("couldn't write {}: {e}", file.display()))
+    let mut part = file.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    std::fs::File::create(&part).and_then(|mut f| f.write_all(bytes)).and_then(|()| std::fs::rename(&part, file)).map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        format!("couldn't write {}: {e}", file.display())
+    })
 }
 
 /// For the shell: single quotes round a word, whatever is in it.
@@ -309,46 +317,137 @@ pub fn take(state: &mut State, renderer: &mut GlesRenderer, wanted: Wanted) {
         What::Area(o, _) | What::Screen(o) => Source::Output(o.clone()),
         What::Window(id) => Source::Window(*id),
     };
-    let mut shot = capture(state, renderer, &source, wanted.pointer, true);
-    if let (Some(s), What::Area(o, r)) = (&shot, &wanted.what) {
-        let scale = state.output_named(o).map(|o| o.current_scale().fractional_scale()).unwrap_or(1.0);
-        shot = crop(s, r.to_physical_precise_round(scale));
-    }
-    let bytes = match shot.ok_or_else(|| "couldn't take a screenshot".to_string()).and_then(|s| png(&s)) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!("{e}");
-            return;
-        }
+    let Some(shot) = capture(state, renderer, &source, wanted.pointer, true) else {
+        tracing::warn!("couldn't take a screenshot");
+        return;
     };
-    if let Some(file) = &wanted.file {
+    let area = match &wanted.what {
+        What::Area(o, r) => {
+            let scale = state.output_named(o).map(|o| o.current_scale().fractional_scale()).unwrap_or(1.0);
+            Some(r.to_physical_precise_round(scale))
+        }
+        _ => None,
+    };
+    let job = Job { shot, area, file: wanted.file, save: wanted.save, edit: wanted.edit, dir: state.config.screenshot_dir.clone() };
+    let Some(jobs) = worker(state) else {
+        if let Some(m) = make(job) {
+            made(state, m);
+        }
+        return;
+    };
+    // A worker that has gone (it panicked) is replaced next time; this picture is made here.
+    if let Err(std::sync::mpsc::SendError(job)) = jobs.send(job) {
+        state.shots.jobs = None;
+        if let Some(m) = make(job) {
+            made(state, m);
+        }
+    }
+}
+
+/// Pictures being cut, made into PNGs and saved one after another, away from the loop:
+/// a PNG of a whole display takes 20 to 300 ms, and the desktop would stand still for it.
+#[derive(Default)]
+pub struct Shots {
+    jobs: Option<std::sync::mpsc::Sender<Job>>,
+}
+
+struct Job {
+    shot: Shot,
+    /// The part of it wanted, in pixels. None: all of it.
+    area: Option<Rectangle<i32, Physical>>,
+    file: Option<PathBuf>,
+    save: bool,
+    edit: bool,
+    /// The settings' `screenshot_dir`.
+    dir: String,
+}
+
+/// A picture made, back on the loop for the clipboard, and the note or the editor.
+struct Made {
+    bytes: Vec<u8>,
+    saved: Option<PathBuf>,
+    save: bool,
+    edit: bool,
+}
+
+/// The worker that makes pictures, started the first time one is taken.
+fn worker(state: &mut State) -> Option<std::sync::mpsc::Sender<Job>> {
+    if state.shots.jobs.is_none() {
+        let (done, back) = channel::channel::<Made>();
+        let (jobs, todo) = std::sync::mpsc::channel::<Job>();
+        std::thread::Builder::new()
+            .name("screenshots".into())
+            .spawn(move || {
+                for job in todo {
+                    if let Some(m) = make(job)
+                        && done.send(m).is_err()
+                    {
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| tracing::warn!("couldn't start making screenshots aside: {e}"))
+            .ok()?;
+        state
+            .handle
+            .insert_source(back, |event, _, state| {
+                if let channel::Event::Msg(m) = event {
+                    made(state, m);
+                }
+            })
+            .map_err(|e| tracing::warn!("couldn't hear back from making screenshots: {e}"))
+            .ok()?;
+        state.shots.jobs = Some(jobs);
+    }
+    state.shots.jobs.clone()
+}
+
+/// Cut, encode and save a picture. None when there is nothing more to do on the loop.
+fn make(job: Job) -> Option<Made> {
+    let shot = match job.area {
+        Some(r) => crop(&job.shot, r),
+        None => Some(job.shot),
+    };
+    let bytes = shot
+        .ok_or_else(|| "couldn't take a screenshot".to_string())
+        .and_then(|mut s| {
+            s.make_opaque();
+            png(s)
+        })
+        .map_err(|e| tracing::warn!("{e}"))
+        .ok()?;
+    if let Some(file) = &job.file {
         if let Err(e) = write(file, &bytes) {
             tracing::warn!("{e}");
         }
-        return;
+        return None;
     }
-    let mut saved = None;
-    if wanted.save {
-        let file = default_file(&state.config);
-        match write(&file, &bytes) {
-            Ok(()) => saved = Some(file),
-            Err(e) => tracing::warn!("{e}"),
+    let saved = job.save.then(|| default_file(&job.dir)).and_then(|file| match write(&file, &bytes) {
+        Ok(()) => Some(file),
+        Err(e) => {
+            tracing::warn!("{e}");
+            None
         }
-    }
+    });
+    Some(Made { bytes, saved, save: job.save, edit: job.edit })
+}
+
+/// The picture is made: onto the clipboard, then marked up or noted.
+fn made(state: &mut State, m: Made) {
     let seat = state.seat.clone();
-    set_data_device_selection(&state.dh, &seat, vec!["image/png".into()], Arc::from(bytes));
+    set_data_device_selection(&state.dh, &seat, vec!["image/png".into()], Arc::from(m.bytes));
     // Marked up next: the program's own window says where the picture is. Where the program
     // isn't there, the picture is saved and copied all the same, and the note says so.
     let editor = state.config.screenshot_edit.trim().to_string();
-    if let (true, Some(file)) = (wanted.edit, &saved)
+    if let (true, Some(file)) = (m.edit, &m.saved)
         && installed(&editor)
     {
         state.spawn(&format!("{editor} {}", quoted(&file.display().to_string())));
         return;
     }
-    let note = match &saved {
+    let note = match &m.saved {
         Some(file) => format!("notify-send -a Softcore -i {} 'Screenshot saved' {}", quoted(&file.display().to_string()), quoted(&format!("{}, and on the clipboard", file.display()))),
-        None if wanted.save => "notify-send -a Softcore 'Screenshot copied' 'It couldn'\\''t be saved, but it is on the clipboard'".to_string(),
+        None if m.save => "notify-send -a Softcore 'Screenshot copied' 'It couldn'\\''t be saved, but it is on the clipboard'".to_string(),
         None => "notify-send -a Softcore 'Screenshot copied' 'On the clipboard'".to_string(),
     };
     state.spawn(&note);

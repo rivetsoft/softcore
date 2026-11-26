@@ -96,9 +96,7 @@ pub fn init(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result
                 });
                 // Straight on to the next frame when there is one to draw: slides run at the
                 // display's own rate.
-                if state.advance() {
-                    with_udev(state, |u, state| u.draw(state));
-                }
+                crate::backend::draw_frame(state);
             }
             DrmEvent::Error(e) => tracing::warn!("the display: {e}"),
         })
@@ -163,6 +161,12 @@ pub fn init(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result
 }
 
 impl Udev {
+    /// Whether the next frame waits: for the TTY to be Softcore's again, or for every
+    /// display to show the frame it has (its vblank draws the next).
+    pub fn waiting(&self) -> bool {
+        !self.active || (!self.screens.is_empty() && self.screens.values().all(|s| s.pending))
+    }
+
     pub fn change_vt(&mut self, vt: i32) {
         if let Err(e) = self.session.change_vt(vt) {
             tracing::warn!("couldn't switch to TTY {vt}: {e}");

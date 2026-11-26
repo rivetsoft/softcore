@@ -13,7 +13,7 @@ use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatState};
 use smithay::output::Output;
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -148,6 +148,7 @@ pub struct State {
     pub redraw: bool,
     /// A picture to take once the next frame is drawn.
     pub screenshot: Option<crate::shot::Wanted>,
+    pub shots: crate::shot::Shots,
     /// Choosing what to take a picture of.
     pub shooter: Option<crate::shot::Shooter>,
     pub ipc: Ipc,
@@ -174,6 +175,9 @@ pub struct State {
     pub image_copy_capture_state: smithay::wayland::image_copy_capture::ImageCopyCaptureState,
     last_frame: Instant,
     pub animating: bool,
+    /// When the last frame was drawn, and the wait for the next when one is due.
+    pub last_draw: Instant,
+    pub frame_timer: Option<RegistrationToken>,
 
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -298,6 +302,7 @@ impl State {
             shaders: None,
             redraw: true,
             screenshot: None,
+            shots: Default::default(),
             shooter: None,
             ipc,
             captures: Default::default(),
@@ -315,6 +320,8 @@ impl State {
             image_copy_capture_state: smithay::wayland::image_copy_capture::ImageCopyCaptureState::new::<State>(&dh2),
             last_frame: Instant::now(),
             animating: false,
+            last_draw: Instant::now(),
+            frame_timer: None,
             config,
             compositor_state,
             xdg_shell_state,
@@ -697,13 +704,15 @@ impl State {
         crate::picker::refresh(self);
         crate::ipc::notify(self);
         crate::workspaces::refresh(self);
+        crate::backend::schedule_frame(self);
         let _ = self.dh.flush_clients();
     }
 
     /// Move everything that is sliding or fading on; true when a frame should be drawn.
     pub fn advance(&mut self) -> bool {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_frame).as_secs_f64().min(0.1);
+        // The first step of a slide after a rest is one frame long, however long the rest was.
+        let dt = now.duration_since(self.last_frame).as_secs_f64().min(if self.animating { 0.1 } else { 1.0 / 60.0 });
         self.last_frame = now;
         let mut moving = self.layout.advance(dt);
         // Windows fading in, and out.
@@ -1043,6 +1052,29 @@ impl State {
             None => root,
         };
         self.outputs.iter().find_map(|o| layer_map_for_output(o).layer_for_surface(&root, WindowSurfaceType::TOPLEVEL).cloned())
+    }
+}
+
+/// A connection that wakes the loop when the other end writes to it or hangs up, so whoever
+/// keeps it (a cast, the picker) notices then rather than whenever something else happens.
+/// Watching stops when this is dropped.
+pub struct Hangup {
+    handle: LoopHandle<'static, State>,
+    token: Option<RegistrationToken>,
+}
+
+impl Hangup {
+    pub fn new(handle: &LoopHandle<'static, State>, stream: &std::os::unix::net::UnixStream) -> Self {
+        let token = stream.try_clone().ok().and_then(|copy| handle.insert_source(Generic::new(copy, Interest::READ, Mode::Edge), |_, _, _| Ok(PostAction::Continue)).ok());
+        Hangup { handle: handle.clone(), token }
+    }
+}
+
+impl Drop for Hangup {
+    fn drop(&mut self) {
+        if let Some(t) = self.token.take() {
+            self.handle.remove(t);
+        }
     }
 }
 
