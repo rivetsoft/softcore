@@ -19,13 +19,17 @@ use pw::stream::{StreamFlags, StreamState};
 use serde_json::json;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{Interest, Mode, PostAction};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
 
-use crate::capture::{Source, capture};
+use crate::capture::{Canvas, Source, read_back};
 use crate::state::State;
 
 /// At most this many frames a second.
 const FRAME_GAP: Duration = Duration::from_millis(32);
+/// And at least one a second, however still the source: a reader may not have been ready to
+/// show the frame before, and it mustn't be left with nothing until something moves.
+const KEEP_GAP: Duration = Duration::from_secs(1);
 
 struct Pipewire {
     _main_loop: pw::main_loop::MainLoopRc,
@@ -40,6 +44,8 @@ struct Shared {
     streaming: bool,
     /// The size agreed with whoever is reading.
     size: Option<(u32, u32)>,
+    /// The reader took RGBA rather than RGBx, so alpha has to say opaque.
+    alpha: bool,
     failed: Option<String>,
 }
 
@@ -52,10 +58,13 @@ pub struct Cast {
     shared: Rc<RefCell<Shared>>,
     /// Who asked: told the stream's number once there is one, and watched for leaving.
     owner: Option<UnixStream>,
+    _hangup: crate::state::Hangup,
     told: bool,
     /// The size last offered.
     offered: (u32, u32),
     last_frame: Instant,
+    /// What the reader was last sent, kept on the GPU so the next frame draws only changes.
+    canvas: Option<Canvas>,
 }
 
 #[derive(Default)]
@@ -63,6 +72,9 @@ pub struct Casts {
     pipewire: Option<Pipewire>,
     pub list: Vec<Cast>,
     next: u32,
+    /// When casts next want a frame drawn (a change came sooner than they take one, or one is
+    /// due to be sent again), so it comes even if nothing else happens.
+    wake: Option<(RegistrationToken, Instant)>,
 }
 
 fn pod(value: spa::pod::Value) -> Vec<u8> {
@@ -166,7 +178,10 @@ pub fn start(state: &mut State, source: Source, cursor: bool, owner: UnixStream)
                     return;
                 }
                 let size = (info.size().width, info.size().height);
-                on_param.borrow_mut().size = Some(size);
+                let mut s = on_param.borrow_mut();
+                s.size = Some(size);
+                s.alpha = info.format() == spa::param::video::VideoFormat::RGBA;
+                drop(s);
                 let bytes = buffers_pod(size);
                 if let Some(p) = Pod::from_bytes(&bytes) {
                     let _ = stream.update_params(&mut [p]);
@@ -185,7 +200,8 @@ pub fn start(state: &mut State, source: Source, cursor: bool, owner: UnixStream)
     let _ = owner.set_nonblocking(true);
     state.casts.next += 1;
     let id = state.casts.next;
-    state.casts.list.push(Cast { id, source, cursor, stream, _listener: listener, shared, owner: Some(owner), told: false, offered: size, last_frame: Instant::now() - FRAME_GAP });
+    let hangup = crate::state::Hangup::new(&state.handle, &owner);
+    state.casts.list.push(Cast { id, source, cursor, stream, _listener: listener, shared, owner: Some(owner), _hangup: hangup, told: false, offered: size, last_frame: Instant::now() - FRAME_GAP, canvas: None });
     state.queue_redraw();
     Ok(())
 }
@@ -262,13 +278,25 @@ pub fn after_draw(state: &mut State, renderer: &mut GlesRenderer) {
         return;
     }
     let mut list = std::mem::take(&mut state.casts.list);
+    let mut owed: Option<Duration> = None;
     for c in &mut list {
-        let (streaming, agreed) = {
+        let (streaming, agreed, alpha) = {
             let s = c.shared.borrow();
-            (s.streaming, s.size)
+            (s.streaming, s.size, s.alpha)
         };
-        if !streaming || c.last_frame.elapsed() < FRAME_GAP {
+        if !streaming {
+            // Whoever reads next starts from a whole frame.
+            c.canvas = None;
             continue;
+        }
+        let since = c.last_frame.elapsed();
+        if since < FRAME_GAP {
+            owed = Some(owed.map_or(FRAME_GAP - since, |o| o.min(FRAME_GAP - since)));
+            continue;
+        }
+        if since >= KEEP_GAP {
+            // Drawn whole, so it is sent whether or not anything changed.
+            c.canvas = None;
         }
         let Some(size) = state.source_size(&c.source).map(|s| (s.w as u32, s.h as u32)) else { continue };
         if agreed != Some(size) {
@@ -283,23 +311,55 @@ pub fn after_draw(state: &mut State, renderer: &mut GlesRenderer) {
             }
             continue;
         }
-        let Some(shot) = capture(state, renderer, &c.source, c.cursor, false) else { continue };
-        let Some(mut buffer) = c.stream.dequeue_buffer() else { continue };
-        let datas = buffer.datas_mut();
-        let Some(data) = datas.first_mut() else { continue };
-        let bytes = shot.rgba.len();
-        let Some(out) = data.data() else { continue };
-        if out.len() < bytes {
-            continue;
+        // Drawn into the cast's own canvas, so an unchanged source sends nothing, and copied
+        // from the GPU's pixels straight into the stream's buffer.
+        let stream = &c.stream;
+        let sent = read_back(state, renderer, &c.source, c.cursor, false, Some(&mut c.canvas), |rgba, w, _| {
+            // A buffer handed back is sent, so one is only taken with a frame to put in it.
+            let Some(mut buffer) = stream.dequeue_buffer() else { return false };
+            let Some(data) = buffer.datas_mut().first_mut() else { return false };
+            let bytes = rgba.len();
+            let Some(out) = data.data().filter(|o| o.len() >= bytes) else { return false };
+            out[..bytes].copy_from_slice(rgba);
+            if alpha {
+                for px in out[..bytes].chunks_exact_mut(4) {
+                    px[3] = 255;
+                }
+            }
+            let chunk = data.chunk_mut();
+            *chunk.offset_mut() = 0;
+            *chunk.size_mut() = bytes as u32;
+            *chunk.stride_mut() = w * 4;
+            true
+        });
+        match sent {
+            Some(true) => {
+                let _ = c.stream.trigger_process();
+                c.last_frame = Instant::now();
+            }
+            // Drawn, but there was nowhere to put it: the next try draws it all again.
+            Some(false) => {
+                c.canvas = None;
+                owed = Some(FRAME_GAP);
+            }
+            None => {}
         }
-        out[..bytes].copy_from_slice(&shot.rgba);
-        let chunk = data.chunk_mut();
-        *chunk.offset_mut() = 0;
-        *chunk.size_mut() = bytes as u32;
-        *chunk.stride_mut() = shot.w * 4;
-        drop(buffer);
-        let _ = c.stream.trigger_process();
-        c.last_frame = Instant::now();
+        let keep = KEEP_GAP.saturating_sub(c.last_frame.elapsed()).max(FRAME_GAP);
+        owed = Some(owed.map_or(keep, |o| o.min(keep)));
     }
     state.casts.list = list;
+    let Some(wait) = owed else { return };
+    let due = Instant::now() + wait;
+    if let Some((token, at)) = state.casts.wake {
+        if at <= due {
+            return;
+        }
+        state.handle.remove(token);
+    }
+    let timer = state.handle.insert_source(Timer::from_duration(wait), |_, _, state| {
+        state.casts.wake = None;
+        state.queue_redraw();
+        TimeoutAction::Drop
+    });
+    state.casts.wake = timer.ok().map(|t| (t, due));
 }

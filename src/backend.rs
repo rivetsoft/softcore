@@ -2,7 +2,7 @@
 //! all (`--headless`: a display in memory, for checks and screenshots that never wait for a
 //! screen). Both draw with the same renderer and the same frame.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::gbm::GbmDevice;
@@ -81,21 +81,67 @@ pub fn renderer_ready(state: &mut State, renderer: &mut GlesRenderer) {
     }
 }
 
-/// Draw when something changed, sixty times a second at most.
+/// The first frame, as soon as the loop runs. Every one after is asked for by
+/// `schedule_frame`.
 pub fn start_frames(event_loop: &EventLoop<'static, State>) -> Result<(), String> {
     event_loop
         .handle()
         .insert_source(Timer::immediate(), |_, _, state| {
-            if state.advance()
-                && let Some(mut backend) = state.backend.take()
-            {
-                backend.draw(state);
-                state.backend = Some(backend);
-            }
-            TimeoutAction::ToDuration(Duration::from_millis(16))
+            schedule_frame(state);
+            TimeoutAction::Drop
         })
         .map(|_| ())
         .map_err(|e| format!("couldn't start drawing: {e}"))
+}
+
+/// Move everything sliding on, and draw if anything changed.
+pub fn draw_frame(state: &mut State) {
+    state.last_draw = Instant::now();
+    if state.advance()
+        && let Some(mut backend) = state.backend.take()
+    {
+        backend.draw(state);
+        state.backend = Some(backend);
+    }
+}
+
+/// The shortest time between two frames: one refresh of the fastest display.
+fn frame_gap(state: &State) -> Duration {
+    let fastest = state.outputs.iter().filter_map(|o| o.current_mode()).map(|m| m.refresh).max().filter(|&r| r > 0).unwrap_or(60_000);
+    Duration::from_secs_f64(1000.0 / fastest as f64)
+}
+
+/// After every batch of events: draw when something changed or is still moving. Nothing
+/// wakes Softcore while nothing does. A display that is about to show a frame draws the
+/// next when it has (udev's vblank); everywhere else frames are a refresh apart at least.
+pub fn schedule_frame(state: &mut State) {
+    if state.frame_timer.is_some() || !(state.redraw || state.animating) {
+        return;
+    }
+    match &state.backend {
+        None => return,
+        Some(Backend::Udev(u)) if u.waiting() => return,
+        _ => {}
+    }
+    let wait = frame_gap(state).saturating_sub(state.last_draw.elapsed());
+    if wait.is_zero() {
+        draw_frame(state);
+        // What drawing asked for in turn (a picker's pictures, a slide's next step) is a
+        // frame later.
+        if state.redraw || state.animating {
+            schedule_frame(state);
+        }
+        return;
+    }
+    let timer = state.handle.insert_source(Timer::from_duration(wait), |_, _, state| {
+        state.frame_timer = None;
+        draw_frame(state);
+        TimeoutAction::Drop
+    });
+    match timer {
+        Ok(t) => state.frame_timer = Some(t),
+        Err(e) => tracing::warn!("couldn't wait for the next frame: {e}"),
+    }
 }
 
 pub fn init_winit(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result<(), String> {
