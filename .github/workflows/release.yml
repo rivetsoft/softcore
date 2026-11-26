@@ -1,0 +1,115 @@
+name: Release
+
+# Builds Softcore's download on GitHub and makes a draft release of it, when its tag is pushed
+# (utilities/softcore-dev ship). A person checks the draft and publishes it with
+# utilities/softcore-dev live; the website ignores drafts until then. Step by step:
+# docs/releasing.md.
+#
+# Run by hand (Actions → Release → Run workflow), and on a pull request that changes how the
+# release is made, it builds the download from that branch and keeps it with the run: a
+# rehearsal, with no tag and no release.
+
+on:
+  push:
+    tags: ["softcore-v[0-9]*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - utilities/softcore-dev
+      - install.sh
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and draft the release
+    # Built against Ubuntu 24.04's glibc (2.39) and libraries, so it runs there and on anything
+    # newer. Ubuntu 22.04's PipeWire (0.3.48) is too old for the pipewire crate's bindings.
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The compositor's libraries, as in ci.yml (with libsystemd-dev, which libseat's pkg-config
+      # file asks for), and what builds libdisplay-info, which the release carries inside the
+      # program.
+      - name: Install the compositor's libraries
+        run: >
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libseat-dev libsystemd-dev libinput-dev libudev-dev libgbm-dev libdrm-dev libxkbcommon-dev
+          libegl-dev libwayland-dev libpipewire-0.3-dev libclang-dev pkg-config
+          meson ninja-build hwdata binutils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Cache libdisplay-info
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/softcore-build
+          key: softcore-build-${{ hashFiles('utilities/softcore-dev') }}
+
+      - name: Is the tag right
+        id: version
+        run: |
+          set -eu
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "softcore-v$version" ]; then
+              echo "::error::$GITHUB_REF_NAME is on a commit where Cargo.toml says $version: raise the version first, then tag (softcore-v$version)"
+              exit 1
+            fi
+            git fetch -q origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$GITHUB_REF_NAME isn't on main: releases are tagged on main after the release pull request is merged"
+              exit 1
+            fi
+          fi
+          grep -q "^## $version\$" CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build the download
+        run: utilities/softcore-dev release
+
+      # What a person will do with it: check the sum, unpack, install for everyone, ask the
+      # version, then take it away again.
+      - name: Check the download
+        run: |
+          set -eu
+          v=${{ steps.version.outputs.version }}
+          cd dist
+          sha256sum -c ./*.sha256
+          here=$(mktemp -d)
+          tar -xzf "softcore-$v-x86_64-linux.tar.gz" -C "$here"
+          "$here/softcore-$v-x86_64-linux/install.sh"
+          /usr/local/bin/softcore --version | tee /dev/stderr | grep -qx "softcore $v"
+          test -f /usr/share/wayland-sessions/softcore.desktop
+          "$here/softcore-$v-x86_64-linux/install.sh" --uninstall
+          test ! -e /usr/local/bin/softcore
+          ls -l
+          cat "notes-$v.md"
+
+      - name: Make the draft release
+        if: github.event_name == 'push'
+        run: utilities/softcore-dev release --draft
+
+      - name: Keep the download with the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: softcore-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/notes-*.md

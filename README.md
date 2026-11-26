@@ -22,7 +22,7 @@ The website and the docs are at [rivetsoft.github.io](https://rivetsoft.github.i
 
 Softcore works the way [niri](https://github.com/YaLTeR/niri) does, and is written from
 scratch: if you know niri's actions and `niri msg`, you already know Softcore's.
-**Early:** no release yet; build it from source.
+**Early:** its releases are pre-releases.
 
 ## What it does
 
@@ -93,19 +93,29 @@ made for each other, and each works without the other.
 
 ## Install
 
-Softcore is built from source. You need Rust 1.88 or newer and the usual compositor
-libraries with their headers: libseat, libinput, libudev, libgbm, libxkbcommon, EGL, PipeWire
-and libdisplay-info.
+Download `softcore-VERSION-x86_64-linux.tar.gz` from the
+[releases](https://github.com/rivetsoft/softcore/releases), then:
+
+```sh
+tar xzf softcore-VERSION-x86_64-linux.tar.gz
+cd softcore-VERSION-x86_64-linux
+./install.sh               # asks for your password, then installs Softcore
+./install.sh --uninstall   # takes it all away again
+```
+
+That installs it for everyone on the machine, and puts it in your login manager's list of
+sessions from the next time you log out. It needs glibc 2.39 or newer (Ubuntu 24.04, Fedora
+40, Debian 13) and the libraries a Wayland desktop usually has: libseat, libinput, libgbm, EGL,
+libxkbcommon and PipeWire.
+
+To build it from source instead, you need Rust 1.88 or newer and the same libraries with their
+headers, and libdisplay-info:
 
 ```sh
 git clone https://github.com/rivetsoft/softcore.git
 cd softcore
 ./install.sh               # builds Softcore, then asks for your password to install it
-./install.sh --uninstall   # takes it all away again
 ```
-
-That installs it for everyone on the machine, and puts it in your login manager's list of
-sessions from the next time you log out.
 
 To try it without installing anything:
 
@@ -126,6 +136,7 @@ Mod+Shift+Slash shows every binding, and Mod+Shift+E leaves.
 
 - [The manual](docs/manual.md): settings, bindings, rules, displays, screen sharing,
   `softcore msg` and what isn't built yet
+- [What changed](CHANGELOG.md) in each release, and [how a release is made](docs/releasing.md)
 - [Softcore on the website](https://rivetsoft.github.io/softcore/), and its
   [docs](https://rivetsoft.github.io/docs/softcore/)
 - [Rivet Shell and the Rivet apps](https://github.com/rivetsoft/apps)
