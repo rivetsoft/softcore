@@ -17,8 +17,8 @@ TITLE=Softcore
 TAG_PREFIX=softcore-v
 # Empty while Softcore is a pre-release (alpha on the website); 1 for a full release.
 STABLE=
-# The newest glibc the download may need: Ubuntu 22.04 has 2.35, Debian 12 2.36.
-GLIBC_MAX=2.35
+# The newest glibc the download may need: Ubuntu 24.04 and Fedora 40 have 2.39, Debian 13 2.41.
+GLIBC_MAX=2.39
 # libdisplay-info is linked into the program, because distributions ship different versions
 # of it (0.1 to 0.3) under different library names.
 LDI_VERSION=0.3.0
@@ -88,7 +88,7 @@ release() {
     mkdir -p "$stage/docs"
     strip -o "$stage/softcore" target/dist/softcore
     glibc=$(objdump -T "$stage/softcore" | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -Vu | tail -n 1)
-    version_le "$glibc" "$GLIBC_MAX" || die "The program needs glibc $glibc, newer than $GLIBC_MAX: build it on Ubuntu 22.04, as the Release workflow does."
+    version_le "$glibc" "$GLIBC_MAX" || die "The program needs glibc $glibc, newer than $GLIBC_MAX: build it on Ubuntu 24.04, as the Release workflow does."
     if objdump -p "$stage/softcore" | grep -q 'NEEDED.*libdisplay-info'; then
         die "The program still loads libdisplay-info from the system instead of carrying it."
     fi
@@ -120,8 +120,8 @@ Log out, and choose Softcore in the login screen's list of sessions.
 
 It needs the libraries a Wayland desktop usually has: libseat, libinput, libgbm, EGL,
 libxkbcommon and PipeWire. The program is built for x86_64 and glibc $glibc or newer (Ubuntu
-22.04, Debian 12 and later). Or build it from the source code: \`./install.sh\` there builds it
-first.
+24.04, Fedora 40, Debian 13 and later). Or build it from the source code: \`./install.sh\` there
+builds it first.
 EOF
     echo "Built dist/$NAME.tar.gz and $notes."
 

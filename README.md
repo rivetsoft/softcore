@@ -104,9 +104,9 @@ cd softcore-VERSION-x86_64-linux
 ```
 
 That installs it for everyone on the machine, and puts it in your login manager's list of
-sessions from the next time you log out. It needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12)
-and the libraries a Wayland desktop usually has: libseat, libinput, libgbm, EGL, libxkbcommon
-and PipeWire.
+sessions from the next time you log out. It needs glibc 2.39 or newer (Ubuntu 24.04, Fedora
+40, Debian 13) and the libraries a Wayland desktop usually has: libseat, libinput, libgbm, EGL,
+libxkbcommon and PipeWire.
 
 To build it from source instead, you need Rust 1.88 or newer and the same libraries with their
 headers, and libdisplay-info:
