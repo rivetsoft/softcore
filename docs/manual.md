@@ -53,6 +53,9 @@ Mod+Shift+E leave.
 ./install.sh --uninstall   # takes it all away again
 ```
 
+The same `install.sh` is in each release's download, `softcore-VERSION-x86_64-linux.tar.gz`,
+where it installs the program beside it instead of building one.
+
 That installs Softcore for everyone on the machine, and it is in the login manager's list
 of sessions from the next time you log out:
 
@@ -63,7 +66,7 @@ of sessions from the next time you log out:
 | What makes the session one to systemd | `/usr/lib/systemd/user/softcore-session.target` |
 | The portal's files | `/usr/share/xdg-desktop-portal/portals/softcore.portal`, `/usr/share/xdg-desktop-portal/softcore-portals.conf` |
 
-The script is `cargo build --release` and then `sudo softcore install --system`, which a
+From the source code the script is `cargo build --release` and then `sudo softcore install --system`, which a
 built Softcore can do on its own. For a package, `DESTDIR=/some/root softcore install
 --system` writes the same files under that folder.
 

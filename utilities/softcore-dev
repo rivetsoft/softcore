@@ -1,0 +1,194 @@
+#!/bin/sh
+# Softcore's releases, made the way the Rivet apps make theirs. Step by step: docs/releasing.md.
+#
+#   utilities/softcore-dev release            build the download in dist/ from this commit
+#   utilities/softcore-dev release --draft    the same, then a draft GitHub release of the tag
+#                                             already on GitHub (what the Release workflow runs)
+#   utilities/softcore-dev ship [--dry-run]   tag the version on main and push the tag; GitHub
+#                                             builds the download and makes the draft
+#   utilities/softcore-dev live               publish that draft, then rebuild the website
+#
+# The version is the one in Cargo.toml, the notes its section of CHANGELOG.md.
+set -eu
+cd "$(dirname "$0")/.."
+
+REPO=rivetsoft/softcore
+TITLE=Softcore
+TAG_PREFIX=softcore-v
+# Empty while Softcore is a pre-release (alpha on the website); 1 for a full release.
+STABLE=
+# The newest glibc the download may need: Ubuntu 22.04 has 2.35, Debian 12 2.36.
+GLIBC_MAX=2.35
+# libdisplay-info is linked into the program, because distributions ship different versions
+# of it (0.1 to 0.3) under different library names.
+LDI_VERSION=0.3.0
+LDI_SHA256=6ae77cd937f9cf7d1321d35c116062c4911e8447010a6a713ac4286f7a9d5987
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/softcore-build
+
+die() {
+    echo "$*" >&2
+    exit 1
+}
+
+# The version in a Cargo.toml read from standard input.
+version() {
+    sed -n 's/^version = "\(.*\)"/\1/p' | head -1
+}
+
+# True when dotted version $1 is no newer than $2.
+version_le() {
+    printf '%s\n%s\n' "$1" "$2" | sort -C -V
+}
+
+static_libdisplay_info() {
+    prefix=$CACHE/libdisplay-info-$LDI_VERSION
+    [ -f "$prefix/lib/libdisplay-info.a" ] && return 0
+    for tool in meson ninja; do
+        command -v $tool >/dev/null || die "Building libdisplay-info needs $tool (and hwdata)."
+    done
+    src=$CACHE/libdisplay-info-$LDI_VERSION.tar.xz
+    mkdir -p "$CACHE"
+    if ! echo "$LDI_SHA256  $src" | sha256sum -c - >/dev/null 2>&1; then
+        curl -fL --proto '=https' --retry 3 -o "$src.part" \
+            "https://gitlab.freedesktop.org/emersion/libdisplay-info/-/releases/$LDI_VERSION/downloads/libdisplay-info-$LDI_VERSION.tar.xz"
+        echo "$LDI_SHA256  $src.part" | sha256sum -c -
+        mv "$src.part" "$src"
+    fi
+    work=$CACHE/libdisplay-info-$LDI_VERSION-src
+    rm -rf "$work" "$prefix"
+    mkdir -p "$work"
+    tar -xJf "$src" -C "$work" --strip-components=1
+    meson setup "$work/build" "$work" --prefix="$prefix" --libdir=lib --buildtype=release -Ddefault_library=static >/dev/null
+    ninja -C "$work/build" install >/dev/null
+    rm -rf "$work"
+}
+
+release() {
+    draft=
+    case "${1:-}" in
+        "") ;;
+        --draft) draft=1 ;;
+        *) die "utilities/softcore-dev release [--draft]" ;;
+    esac
+    [ "$(uname -m)" = x86_64 ] || die "The release download is built on x86_64, not $(uname -m)."
+    VERSION=$(version <Cargo.toml)
+    TAG=$TAG_PREFIX$VERSION
+    NAME=softcore-$VERSION-x86_64-linux
+    [ -z "$(git status --porcelain)" ] || die "Commit your changes first (the release is built from the current commit)."
+    grep -q "^## $VERSION\$" CHANGELOG.md || die "CHANGELOG.md has no section for $VERSION."
+
+    static_libdisplay_info
+    PKG_CONFIG_PATH="$CACHE/libdisplay-info-$LDI_VERSION/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+        SYSTEM_DEPS_LIBDISPLAY_INFO_LINK=static \
+        cargo build --profile dist --locked
+
+    mkdir -p dist
+    stage=dist/$NAME
+    rm -rf "$stage"
+    mkdir -p "$stage/docs"
+    strip -o "$stage/softcore" target/dist/softcore
+    glibc=$(objdump -T "$stage/softcore" | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -Vu | tail -n 1)
+    version_le "$glibc" "$GLIBC_MAX" || die "The program needs glibc $glibc, newer than $GLIBC_MAX: build it on Ubuntu 22.04, as the Release workflow does."
+    if objdump -p "$stage/softcore" | grep -q 'NEEDED.*libdisplay-info'; then
+        die "The program still loads libdisplay-info from the system instead of carrying it."
+    fi
+    cp install.sh README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$stage/"
+    cp docs/manual.md "$stage/docs/"
+    tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+    rm -rf "$stage"
+    (cd dist && sha256sum "$NAME.tar.gz" >"$NAME.tar.gz.sha256")
+
+    # The notes: the README's first picture as it is at the tag, the changelog, how to install.
+    notes=dist/notes-$VERSION.md
+    shot=$(grep -m1 -E '^!\[[^]]*\]\(docs/screenshots/[^)]+\)' README.md) || die "README.md has no picture from docs/screenshots to open the release notes with."
+    printf '%s\n\n' "$shot" | sed "s#](docs/screenshots/#](https://raw.githubusercontent.com/$REPO/$TAG/docs/screenshots/#" >"$notes"
+    awk -v v="## $VERSION" '$0 ~ "^## " { p = ($0 == v) } p' CHANGELOG.md | tail -n +2 >>"$notes"
+    cat >>"$notes" <<EOF
+
+### Install
+
+Download \`$NAME.tar.gz\`, then:
+
+\`\`\`sh
+tar xzf $NAME.tar.gz
+cd $NAME
+./install.sh               # asks for your password, then installs Softcore for everyone
+./install.sh --uninstall   # takes it all away again
+\`\`\`
+
+Log out, and choose Softcore in the login screen's list of sessions.
+
+It needs the libraries a Wayland desktop usually has: libseat, libinput, libgbm, EGL,
+libxkbcommon and PipeWire. The program is built for x86_64 and glibc $glibc or newer (Ubuntu
+22.04, Debian 12 and later). Or build it from the source code: \`./install.sh\` there builds it
+first.
+EOF
+    echo "Built dist/$NAME.tar.gz and $notes."
+
+    [ -n "$draft" ] || return 0
+    if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+        echo "GitHub already has the $TAG release."
+    else
+        if [ -n "$STABLE" ]; then pre=--prerelease=false; else pre=--prerelease; fi
+        gh release create "$TAG" -R "$REPO" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" \
+            --verify-tag --draft --title "$TITLE $VERSION" --notes-file "$notes" "$pre"
+    fi
+    gh release view "$TAG" -R "$REPO" --json url -q .url
+}
+
+ship() {
+    dry=
+    case "${1:-}" in
+        "") ;;
+        --dry-run | -n) dry=1 ;;
+        *) die "utilities/softcore-dev ship [--dry-run]" ;;
+    esac
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || die "Commit your changes first: a release is made from main as it is on GitHub."
+    git fetch -q origin main --tags
+    git merge-base --is-ancestor HEAD origin/main || die "This commit isn't on GitHub's main. Merge the release pull request, then: git switch main && git pull"
+    VERSION=$(version <Cargo.toml)
+    TAG=$TAG_PREFIX$VERSION
+    if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || [ -n "$(git ls-remote origin "refs/tags/$TAG")" ]; then
+        die "$TAG is already tagged: raise the version in Cargo.toml and CHANGELOG.md first."
+    fi
+    grep -q "^## $VERSION\$" CHANGELOG.md || die "CHANGELOG.md has no section for $VERSION."
+    if [ -n "$dry" ]; then
+        echo "Would tag $TAG ($TITLE $VERSION) on $(git rev-parse --short HEAD) and push it."
+        return
+    fi
+    git tag -a "$TAG" -m "$TITLE $VERSION"
+    git push -q origin "refs/tags/$TAG"
+    echo "Pushed $TAG: GitHub is building $TITLE $VERSION."
+    echo "Follow it with: gh run list -R $REPO --workflow release.yml"
+    echo "It makes a draft release. When the draft looks right: utilities/softcore-dev live"
+}
+
+live() {
+    git fetch -q origin main
+    VERSION=$(git show origin/main:Cargo.toml | version)
+    TAG=$TAG_PREFIX$VERSION
+    state=$(gh release view "$TAG" -R "$REPO" --json isDraft,assets -q '"\(.isDraft) \(.assets | length)"' 2>/dev/null || true)
+    case "$state" in
+        "true 2") ;;
+        "false "*) die "$TAG is already published." ;;
+        "") die "No release for $TAG yet: utilities/softcore-dev ship, and wait for its build." ;;
+        *) die "The $TAG draft has $(echo "$state" | cut -d' ' -f2) files, not 2: look at its build (gh run list -R $REPO --workflow release.yml)." ;;
+    esac
+    if [ -n "$STABLE" ]; then pre=--prerelease=false; else pre=--prerelease; fi
+    gh release edit "$TAG" -R "$REPO" --draft=false "$pre" >/dev/null
+    echo "Published $TITLE $VERSION: $(gh release view "$TAG" -R "$REPO" --json url -q .url)"
+    if gh workflow run deploy.yml -R rivetsoft/rivetsoft.github.io >/dev/null; then
+        echo "Rebuilding the website with the new release."
+    else
+        echo "Couldn't start the website's rebuild: gh workflow run deploy.yml -R rivetsoft/rivetsoft.github.io" >&2
+    fi
+}
+
+command=${1:-help}
+[ $# -eq 0 ] || shift
+case "$command" in
+    release) release "$@" ;;
+    ship) ship "$@" ;;
+    live) live "$@" ;;
+    *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
