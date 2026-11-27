@@ -128,8 +128,10 @@ cargo build --release
 Mod is Super on displays of its own, and Alt in a window. Mod+Return opens a terminal,
 Mod+Shift+Slash shows every binding, and Mod+Shift+E leaves.
 
-> **About "early".** Softcore is used on its author's machine and nowhere else yet. Other
-> hardware (more than one GPU, touchpads, touchscreens, tablets) is written and untried.
+> **About "early".** Softcore is its author's everyday desktop on real hardware, started from
+> a TTY or a login screen, with real keyboards and mice and screen sharing to real apps. Not
+> yet checked: touchscreens, pens and tablets, three- and four-finger gestures, input methods,
+> and machines with more than one GPU.
 > The manual has the [honest list](docs/manual.md#what-isnt-built-yet).
 
 ## Learn more
