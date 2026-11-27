@@ -10,8 +10,10 @@ always last. When a display is unplugged its workspaces move to another display,
 to it when it returns. With no display left they wait for the next one.
 
 Softcore is early. It runs on displays of its own, in a window of another desktop and with no
-screen at all. The last two are checked by the tests and by hand; on real hardware it has
-only been used on its author's machine (see *What isn't built yet*).
+screen at all. On real hardware it has been its author's everyday desktop since the start:
+started from a TTY and from a login screen, with real keyboards and mice, and screen sharing
+to real apps through xdg-desktop-portal. The other two are checked by the tests and by hand.
+What hasn't been checked yet is under *What isn't built yet*.
 
 ## Build and run
 
@@ -597,17 +599,10 @@ and moving workspaces aren't offered, as Softcore makes and drops them itself.
 
 ## What isn't built yet
 
-- **Other people's hardware.** The TTY backend (DRM, libinput, libseat, TTY switching) is
-  used on one machine, with one GPU, a keyboard and a mouse. Nothing else has been
-  tried: more than one GPU, touchpad settings and laptops' own keys are written and wait
-  for someone who has them.
-- Screen sharing from a real app. Every part is checked on its own (the D-Bus service
-  called by hand, the picker, the stream read by GStreamer), but not yet a browser going
-  through xdg-desktop-portal, which needs a Softcore session and the files above installed.
-  Sharing more than one thing in one request, and remembering a choice, aren't built.
-- Fingers, pens and input methods on real hardware: three- and four-finger swipes, touch,
-  tablets and input methods are written and none has met a real device yet. A touchscreen
-  or tablet can't be given a display of its own choosing. Presentation timing.
+- **Not yet checked on hardware.** Touchscreens, pens and tablets; three- and four-finger
+  gestures; input methods; machines with more than one GPU. They are written and none has
+  met a real device yet. A touchscreen or tablet can't be given a display of its own choosing.
+- Sharing more than one thing in one request, and remembering a choice. Presentation timing.
 - Blur doesn't follow a surface's round corners or its
   see-through parts; it fills the rectangle.
 - Animations for floating windows, which jump, as a floating window going to full screen does.
