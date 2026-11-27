@@ -1,7 +1,13 @@
-//! `softcore portal`: the part of screen sharing that apps talk to. An app in a call asks
-//! xdg-desktop-portal to share the screen; the portal asks this service
-//! (`org.freedesktop.impl.portal.ScreenCast`); this asks Softcore to show its picker and then
-//! to start a stream, and hands the stream's PipeWire number back.
+//! `softcore portal`: Softcore's backend for xdg-desktop-portal, the service apps that aren't
+//! Rivet's talk to.
+//!
+//! - `org.freedesktop.impl.portal.ScreenCast`: an app in a call asks to share the screen; this
+//!   asks Softcore to show its picker and then to start a stream, and hands the stream's
+//!   PipeWire number back.
+//! - `org.freedesktop.impl.portal.Screenshot`: a picture of the screen, chosen in Softcore's
+//!   own screenshot chooser or taken at once, and a color picked from the screen.
+//! - `org.freedesktop.impl.portal.Settings`: dark or light, the accent and the contrast
+//!   (`appearance.rs`).
 //!
 //! It holds a connection to Softcore for every stream it started. Softcore stops a stream
 //! when its connection closes, so an app closing its session, or this service going away,
@@ -22,7 +28,7 @@ const WINDOW: u32 = 2;
 /// The pointer drawn into the picture.
 const CURSOR_EMBEDDED: u32 = 2;
 
-type Dict = HashMap<String, OwnedValue>;
+pub type Dict = HashMap<String, OwnedValue>;
 
 #[derive(Default)]
 struct Session {
@@ -47,7 +53,7 @@ fn socket() -> Option<PathBuf> {
 
 /// Ask Softcore something and wait for its one-line answer. The connection comes back too:
 /// for a stream, keeping it open keeps the stream.
-fn ask(words: &[&str]) -> Result<(Json, UnixStream), String> {
+pub fn ask(words: &[&str]) -> Result<(Json, UnixStream), String> {
     let path = socket().ok_or("Softcore isn't running")?;
     let mut stream = UnixStream::connect(&path).map_err(|e| format!("couldn't reach Softcore: {e}"))?;
     writeln!(stream, "{}", json!(words)).map_err(|e| e.to_string())?;
@@ -102,7 +108,69 @@ fn pick_and_start(types: u32, cursor: bool, app: String) -> Result<Option<Stream
     Ok(Some(Stream { node: n("node_id") as u32, size: (n("width") as i32, n("height") as i32), source_type: if kind == "output" { MONITOR } else { WINDOW }, connection }))
 }
 
-fn owned(v: Value<'_>) -> OwnedValue {
+/// A path as a `file://` URI.
+fn file_uri(path: &str) -> String {
+    let mut uri = String::from("file://");
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
+}
+
+struct Screenshot;
+
+#[zbus::interface(name = "org.freedesktop.impl.portal.Screenshot")]
+impl Screenshot {
+    async fn screenshot(&self, _handle: ObjectPath<'_>, _app_id: String, _parent_window: String, options: Dict) -> (u32, Dict) {
+        let interactive = options.get("interactive").and_then(|v| bool::try_from(v).ok()).unwrap_or(false);
+        // Saved where the person's own screenshots go, so a picture an app took is theirs too.
+        let file = crate::shot::default_file(&softcore_settings::Config::load().screenshot_dir).display().to_string();
+        let asked = blocking::unblock(move || {
+            let words: Vec<&str> = if interactive { vec!["pick-screenshot", &file] } else { vec!["pick-screenshot", "--now", &file] };
+            ask(&words).map(|(v, _)| v)
+        })
+        .await;
+        match asked {
+            Ok(Json::String(path)) => {
+                let mut results = Dict::new();
+                results.insert("uri".into(), owned(Value::from(file_uri(&path))));
+                (0, results)
+            }
+            Err(e) if e == "nothing was chosen" => (1, Dict::new()),
+            other => {
+                eprintln!("softcore portal: no screenshot: {other:?}");
+                (2, Dict::new())
+            }
+        }
+    }
+
+    async fn pick_color(&self, _handle: ObjectPath<'_>, _app_id: String, _parent_window: String, _options: Dict) -> (u32, Dict) {
+        match blocking::unblock(|| ask(&["pick-color"]).map(|(v, _)| v)).await {
+            Ok(Json::Array(rgb)) if rgb.len() == 3 => {
+                let c = |i: usize| rgb[i].as_f64().unwrap_or(0.0) / 255.0;
+                let mut results = Dict::new();
+                results.insert("color".into(), owned(Value::from((c(0), c(1), c(2)))));
+                (0, results)
+            }
+            Err(e) if e == "nothing was chosen" => (1, Dict::new()),
+            other => {
+                eprintln!("softcore portal: no color: {other:?}");
+                (2, Dict::new())
+            }
+        }
+    }
+
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        2
+    }
+}
+
+pub fn owned(v: Value<'_>) -> OwnedValue {
     v.try_to_owned().expect("a value with no file descriptors can be kept")
 }
 
@@ -199,6 +267,8 @@ impl SessionObject {
 }
 
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.softcore";
+/// Where every backend interface lives, as xdg-desktop-portal expects.
+pub const PATH: &str = "/org/freedesktop/portal/desktop";
 
 pub fn run() -> i32 {
     // Started by Softcore for its session: go when it goes.
@@ -207,11 +277,20 @@ pub fn run() -> i32 {
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
         }
     }
-    let made = zbus::blocking::connection::Builder::session().and_then(|b| b.name(BUS_NAME)).and_then(|b| b.serve_at("/org/freedesktop/portal/desktop", ScreenCast { sessions: Sessions::default() })).and_then(|b| b.build());
+    let made = zbus::blocking::connection::Builder::session()
+        .and_then(|b| b.name(BUS_NAME))
+        .and_then(|b| b.serve_at(PATH, ScreenCast { sessions: Sessions::default() }))
+        .and_then(|b| b.serve_at(PATH, Screenshot))
+        .and_then(|b| b.serve_at(PATH, crate::appearance::Settings))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::Inhibit::new()))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::GlobalShortcuts::new()))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::Wallpaper))
+        .and_then(|b| b.build());
     match made {
-        Ok(_connection) => loop {
-            std::thread::park();
-        },
+        Ok(connection) => {
+            crate::appearance::watch(connection.into_inner());
+            0
+        }
         Err(e) => {
             eprintln!("softcore portal: couldn't start on the session bus: {e}");
             1

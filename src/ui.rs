@@ -370,8 +370,15 @@ fn title_bar(ui: &mut egui::Ui, c: &Config, view: &crate::titlebar::View) {
 }
 
 fn shot(ui: &mut egui::Ui, view: &crate::shot::View) {
+    let keys: &[(&str, &str)] = if view.color {
+        &[("Click", "Pick this color"), ("Esc", "Cancel")]
+    } else if view.for_app {
+        &[("Enter", "Share"), ("S", "Display"), ("W", "Window"), ("Esc", "Cancel")]
+    } else {
+        &[("Enter", "Save"), ("Ctrl+C", "Copy"), ("E", "Edit"), ("Esc", "Cancel")]
+    };
     ui.horizontal_centered(|ui| {
-        for (key, what) in [("Enter", "Save"), ("Ctrl+C", "Copy"), ("E", "Edit"), ("Esc", "Cancel")] {
+        for &(key, what) in keys {
             if key == "E" && !view.edit {
                 continue;
             }

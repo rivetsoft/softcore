@@ -176,6 +176,8 @@ pub enum Action {
     /// Every workspace at once, drawn small. None: open if shut, shut if open.
     Overview(Option<bool>),
     ToggleShortcutsInhibit,
+    /// An app's own shortcut, by the app's id and the shortcut's (the global shortcuts portal).
+    AppShortcut(String, String),
     PowerOffMonitors,
     PowerOnMonitors,
     ReloadConfig,
@@ -266,6 +268,10 @@ impl Action {
             "reload-config" | "load-config-file" => Action::ReloadConfig,
             "change-vt" => Action::ChangeVt(num("a TTY's number")? as i32),
             "screenshot" => Action::Screenshot,
+            "app-shortcut" => match rest.split_once(char::is_whitespace) {
+                Some((app, id)) if !id.trim().is_empty() => Action::AppShortcut(app.to_string(), id.trim().to_string()),
+                _ => return Err("app-shortcut needs an app's id and the shortcut's".into()),
+            },
             "screenshot-screen" => Action::ScreenshotScreen((!rest.is_empty()).then(|| rest.to_string())),
             "screenshot-window" => Action::ScreenshotWindow((!rest.is_empty()).then(|| rest.to_string())),
             _ => return Err(format!("no action called {name}")),
@@ -326,6 +332,7 @@ impl Action {
             Action::PowerOnMonitors => "Displays on".into(),
             Action::ReloadConfig => "Read the settings again".into(),
             Action::Screenshot => "Take a picture of part of the screen".into(),
+            Action::AppShortcut(app, id) => format!("{id} in {app}"),
             Action::ScreenshotScreen(_) => "Take a picture of the screen".into(),
             Action::ScreenshotWindow(_) => "Take a picture of the window".into(),
             Action::ChangeVt(n) => format!("TTY {n}"),

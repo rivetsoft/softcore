@@ -16,6 +16,22 @@
   colors and button side can be set; a rule can turn one off for a program that draws its
   own.
 - `softcore msg workspaces` gives each workspace's `layout`, for a panel switch.
+- **Apps follow the desktop's dark or light and its accent.** GTK, libadwaita, Qt, Firefox and
+  Electron apps take dark or light, the accent and the contrast from the same place Rivet's
+  apps do, and change with them while they run.
+- **Screenshots from apps use Softcore's chooser.** An app that takes a screenshot through the
+  desktop portal gets the same chooser as Print: drag out an area, click a window or take the
+  whole display. The picture is saved with your other screenshots.
+- **Apps can pick a color from the screen.** A color picker in any app that asks the desktop
+  portal waits for a click and gets the color under it.
+- **Apps can keep the screen awake.** A video or a call in a window that isn't in front keeps
+  the screen from dimming and locking, and can keep the computer from suspending.
+- **Apps' shortcuts work in any window.** Push to talk and other shortcuts an app asks for get
+  the keys it suggests when nothing else uses them, and a binding gives keys to the rest
+  (`app-shortcut APP ID`).
+- **Apps can set the wallpaper** through Rivet Shell, after you allow it.
+- **Every desktop portal goes somewhere on purpose.** The portal settings Softcore installs
+  name a backend for each one, and the manual has a table of which and why.
 
 ## 0.1.0
 
