@@ -1065,12 +1065,26 @@ impl Layout {
     }
 
     /// Send a window to another display, a column of its own on the workspace in view there.
-    pub fn move_window_to_monitor(&mut self, id: WinId, name: &str) {
+    /// A floating window floats there too, at its size, as far across and down the room
+    /// around it as it was, and all of it on that display. `float_size`: the size each
+    /// floating window has chosen.
+    pub fn move_window_to_monitor(&mut self, id: WinId, name: &str, float_size: &dyn Fn(WinId) -> (i32, i32)) {
         let (Some((mi, wi)), Some(to)) = (self.find(id), self.monitor(name)) else { return };
         if mi == to {
             return;
         }
         let floating = self.mons[mi].wss[wi].floating.contains(&id);
+        if floating && self.float(id).pos.is_some() {
+            let (from, area) = (self.mons[mi].area, self.mons[to].area);
+            let r = self.float_rect(id, &from, self.float_size(id).unwrap_or_else(|| float_size(id)));
+            let across = |at: i32, room: i32, len: i32, to_room: i32| {
+                let part = if room > len { (at as f64 / (room - len) as f64).clamp(0.0, 1.0) } else { 0.5 };
+                (part * (to_room - len.min(to_room)) as f64).round() as i32
+            };
+            let pos = (across(r.x - from.x, from.w, r.w, area.w), across(r.y - from.y, from.h, r.h, area.h));
+            let size = self.float(id).size;
+            self.floats.insert(id, Float { pos: Some(pos), size, hold: (false, false) });
+        }
         let width = self.opts.default_width;
         self.mons[mi].wss[wi].remove(id);
         self.heights.remove(&id);
@@ -1172,6 +1186,29 @@ impl Layout {
         self.floats.insert(id, Float { size: f.size.map(|(w, h)| (w.max(80), h.max(60))), ..f });
     }
 
+    /// Where a floating window of the size it has is drawn in the part of a display panels
+    /// leave free: where it was put, else the middle, and never so far off that it can't be
+    /// reached.
+    fn float_rect(&self, id: WinId, area: &Rect, size: (i32, i32)) -> Rect {
+        let (w, h) = (size.0.clamp(1, area.w.max(1)), size.1.clamp(1, area.h.max(1)));
+        let f = self.float(id);
+        let (x, y) = match f.pos {
+            Some((x, y)) => {
+                let (rw, rh) = f.size.unwrap_or((w, h));
+                (area.x + x + if f.hold.0 { rw - w } else { 0 }, area.y + y + if f.hold.1 { rh - h } else { 0 })
+            }
+            None => (area.x + (area.w - w) / 2, area.y + (area.h - h) / 2),
+        };
+        let x = x.min(area.x + area.w - HOLD).max(area.x + HOLD - w);
+        let y = y.min(area.y + area.h - HOLD).max(area.y);
+        Rect::new(x, y, w, h)
+    }
+
+    /// The display a window is on, by its name.
+    pub fn output_of(&self, id: WinId) -> Option<&str> {
+        self.find(id).map(|(mi, _)| self.mons[mi].name.as_str())
+    }
+
     /// The part of the display a window's workspace has, panels left out.
     pub fn area_of(&self, id: WinId) -> Option<Rect> {
         self.find(id).map(|(mi, _)| self.mons[mi].area)
@@ -1261,12 +1298,19 @@ impl Layout {
         }
     }
 
-    pub fn move_column_to_monitor(&mut self, by: i32) {
+    /// Send the focused column to the next display in a direction, or the floating window
+    /// with the focus (as `move_window_to_monitor` does).
+    pub fn move_column_to_monitor(&mut self, by: i32, float_size: &dyn Fn(WinId) -> (i32, i32)) {
         let Some(to) = self.neighbour(by) else { return };
         let from = self.active_mon;
         let m = &mut self.mons[from];
         let ws = &mut m.wss[m.active];
-        if ws.float_focus.is_some() || ws.cols.is_empty() {
+        if let Some(f) = ws.float_focus {
+            let name = self.mons[to].name.clone();
+            self.move_window_to_monitor(f, &name, float_size);
+            return;
+        }
+        if ws.cols.is_empty() {
             return;
         }
         let a = ws.active;
@@ -1545,22 +1589,8 @@ impl Layout {
                 }
             }
         }
-        let area = &m.area;
         for id in &ws.floating {
-            let (w, h) = float_size(*id);
-            let (w, h) = (w.clamp(1, area.w.max(1)), h.clamp(1, area.h.max(1)));
-            // Where it was put, else the middle; and never so far off that it can't be reached.
-            let f = self.float(*id);
-            let (x, y) = match f.pos {
-                Some((x, y)) => {
-                    let (rw, rh) = f.size.unwrap_or((w, h));
-                    (area.x + x + if f.hold.0 { rw - w } else { 0 }, area.y + y + if f.hold.1 { rh - h } else { 0 })
-                }
-                None => (area.x + (area.w - w) / 2, area.y + (area.h - h) / 2),
-            };
-            let x = x.min(area.x + area.w - HOLD).max(area.x + HOLD - w);
-            let y = y.min(area.y + area.h - HOLD).max(area.y);
-            let rect = Rect::new(x, y, w, h);
+            let rect = self.float_rect(*id, &m.area, float_size(*id));
             if ws.fullscreen != Some(*id) {
                 out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0, tab: None, hidden: false });
             }
@@ -1800,10 +1830,41 @@ mod tests {
         assert_eq!((l.active_window(), tile(&l, 1).fullscreen), (Some(3), false));
         // Asked for on another display, it goes there.
         l.add_monitor("B", (800, 600));
-        l.move_window_to_monitor(3, "B");
+        l.move_window_to_monitor(3, "B", &fs);
         l.set_fullscreen(3, Some(true));
         l.finish_animations();
         assert_eq!(l.tiles(1, &fs).iter().map(|t| (t.id, t.rect)).collect::<Vec<_>>(), vec![(3, Rect::new(0, 0, 800, 600))]);
+    }
+
+    #[test]
+    fn a_floating_window_goes_to_another_display() {
+        let mut l = layout();
+        l.add_monitor("B", (800, 400));
+        l.add_window(1, false, None);
+        l.add_window(2, true, None);
+        let at = |l: &Layout| l.mons.iter().enumerate().find_map(|(mi, m)| m.wss[m.active].floating.contains(&2).then(|| (mi, l.tiles(mi, &fs).iter().find(|t| t.id == 2).unwrap().rect)));
+        // Put near the right edge of A: 1000 wide, so 700 of room around a window 300 wide.
+        l.set_float(2, Float { pos: Some((560, 100)), ..Default::default() });
+        // The key takes it, not the column under it, and the focus goes with it.
+        l.move_column_to_monitor(1, &fs);
+        assert_eq!((l.active_mon, l.active_window(), l.is_floating(2)), (1, Some(2), true));
+        assert_eq!(l.mons[0].wss[0].cols.len(), 1);
+        // As far across the room there (500) and down it (200) as it was: 0.8 and 0.25.
+        assert_eq!(at(&l), Some((1, Rect::new(400, 50, 300, 200))));
+        l.move_column_to_monitor(-1, &fs);
+        assert_eq!(at(&l), Some((0, Rect::new(560, 100, 300, 200))));
+        // In the middle, it is in the middle there too.
+        l.set_float(2, Float::default());
+        l.move_column_to_monitor(1, &fs);
+        assert_eq!(at(&l), Some((1, Rect::new(250, 100, 300, 200))));
+        // The size it was given stays, and it is put where all of it fits on the smaller display.
+        l.move_column_to_monitor(-1, &fs);
+        l.set_float(2, Float { pos: Some((900, 500)), size: Some((600, 500)), ..Default::default() });
+        l.move_column_to_monitor(1, &fs);
+        assert_eq!((l.float(2).pos, l.float_size(2)), (Some((200, 0)), Some((600, 500))));
+        // Opened by a rule on a display, it floats there.
+        l.open_window(3, Open { floating: true, output: Some("A"), ..Default::default() });
+        assert_eq!((l.output_of(3), l.is_floating(3), l.active_window()), (Some("A"), true, Some(3)));
     }
 
     #[test]
@@ -2256,7 +2317,7 @@ mod tests {
         assert!(l.mons.iter().all(|m| m.wss.last().is_some_and(|w| w.is_empty())));
         // A window moved to another display by hand stays there.
         l.focus_window(1);
-        l.move_column_to_monitor(-1);
+        l.move_column_to_monitor(-1, &fs);
         l.remove_monitor("B");
         l.add_monitor("B", (800, 600));
         assert_eq!(l.find(1).map(|p| p.0), Some(0));

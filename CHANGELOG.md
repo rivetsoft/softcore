@@ -15,7 +15,8 @@ yet, so keep another session to log in to.
   workspaces move to another, then go back when it returns.
 - **Up and down too**: a workspace can scroll vertically, which suits a tall display.
 - **Tabs, floating windows and scratchpads.** A column can show its windows as tabs, any
-  window can float, and named scratchpads come and go on a key.
+  window can float, and named scratchpads come and go on a key. A floating window goes to
+  another display on the same keys as a column, or by dragging it there.
 - **The overview** shows every workspace of each display at once. Click a window or a
   workspace to go there.
 - **Bindings for anything**, in one settings file of plain `key=value` lines that Softcore

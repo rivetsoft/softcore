@@ -54,7 +54,8 @@ Options:
   --tty                On displays of its own (the default from a TTY)
   --winit              In a window of the desktop that is running (the default there)
   --headless           With no screen: a display in memory, for checks and screenshots
-  --size WIDTHxHEIGHT  The headless display's size (1280x800)
+  --size WIDTHxHEIGHT  The headless display's size (1280x800); more than one, split by
+                       commas, for as many displays side by side
   --spawn COMMAND      Run a command once started (may be given more than once)
   --portal             Also run the screen-sharing service (always on, on displays of its own)
   -h, --help           This
@@ -100,7 +101,7 @@ fn main() {
     }
 
     let mut place = Where::Auto;
-    let mut size = (1280, 800);
+    let mut sizes = vec![(1280, 800)];
     let mut spawn = Vec::new();
     let mut portal = false;
     let mut it = args.iter();
@@ -110,9 +111,9 @@ fn main() {
             "--headless" => place = Where::Headless,
             "--tty" => place = Where::Tty,
             "--portal" => portal = true,
-            "--size" => match it.next().and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))) {
-                Some(s) => size = s,
-                None => fail("--size needs a size like 1280x800"),
+            "--size" => match it.next().and_then(|s| s.split(',').map(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))).collect::<Option<Vec<_>>>()) {
+                Some(s) => sizes = s,
+                None => fail("--size needs a size like 1280x800, or sizes like 1280x800,1920x1080"),
             },
             "--spawn" => match it.next() {
                 Some(c) => spawn.push(c.clone()),
@@ -145,7 +146,7 @@ fn main() {
     let mut state = State::new(display, event_loop.handle(), event_loop.get_signal(), !matches!(place, Where::Tty), config);
 
     let started = match place {
-        Where::Headless => backend::init_headless(&event_loop, &mut state, size),
+        Where::Headless => backend::init_headless(&event_loop, &mut state, &sizes),
         Where::Tty => udev::init(&event_loop, &mut state),
         _ => backend::init_winit(&event_loop, &mut state),
     };

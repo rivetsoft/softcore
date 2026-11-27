@@ -32,6 +32,8 @@ pub struct Drag {
     /// and whether it is the near edge (the left, or the top) that follows the pointer.
     column: Option<(f64, f64, bool, bool)>,
     pub spot: Option<(Spot, String, Rect)>,
+    /// A floating window carried onto another display: let go of, all of it goes on that one.
+    crossed: bool,
     pub mark: crate::render::Deco,
     pub mark_id: smithay::backend::renderer::element::Id,
 }
@@ -105,9 +107,14 @@ fn place(state: &State, id: WinId) -> Option<(Rect, Rect)> {
         return None;
     }
     let area = state.layout.area_of(id)?;
-    let output = state.wins.get(&id)?.output.as_deref().and_then(|n| state.output_named(n))?;
+    let output = state.layout.output_of(id).and_then(|n| state.output_named(n))?;
     let rect = state.tiles(output).into_iter().find(|t| t.id == id && !t.fullscreen)?.rect;
     Some((rect, area))
+}
+
+/// Where the display a window is on has its corner, among all of them.
+fn origin(state: &State, id: WinId) -> Option<Point<i32, Logical>> {
+    state.layout.output_of(id).and_then(|n| state.output_named(n)).map(|o| State::output_geometry(o).loc)
 }
 
 fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool, hold: (bool, bool)) {
@@ -133,7 +140,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
             });
             let column = (was, whole, down, near.unwrap_or(false));
             state.cursor_status = CursorImageStatus::Named(if column.2 { CursorIcon::NsResize } else { CursorIcon::EwResize });
-            state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+            state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
             state.queue_redraw();
             return true;
         }
@@ -143,15 +150,13 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
             state.tiles(o).into_iter().find(|t| t.id == id && !t.floating && !t.fullscreen && !t.hidden).map(|t| (t, Rect::new(t.rect.x + origin.x, t.rect.y + origin.y, t.rect.w, t.rect.h)))
         });
         let Some((tile, rect)) = tile.filter(|_| !resize && !state.overview.on) else { return false };
-        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), column: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), column: None, spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
         return true;
     };
-    let resize = resize.then(|| {
-        corner.unwrap_or_else(|| {
-            let origin = state.wins.get(&id).and_then(|w| w.output.as_deref()).and_then(|n| state.output_named(n)).map(|o| State::output_geometry(o).loc).unwrap_or_default();
-            ((from.x - origin.x as f64) < (rect.x + rect.w / 2) as f64, (from.y - origin.y as f64) < (rect.y + rect.h / 2) as f64)
-        })
-    });
+    // Held among all the displays, so it can be carried from one to another.
+    let at = origin(state, id).unwrap_or_default();
+    let rect = Rect::new(rect.x + at.x, rect.y + at.y, rect.w, rect.h);
+    let resize = resize.then(|| corner.unwrap_or_else(|| (from.x < (rect.x + rect.w / 2) as f64, from.y < (rect.y + rect.h / 2) as f64)));
     state.cursor_status = CursorImageStatus::Named(match resize {
         None => CursorIcon::Grabbing,
         Some((true, true)) => CursorIcon::NwResize,
@@ -159,7 +164,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
         Some((true, false)) => CursorIcon::SwResize,
         Some((false, false)) => CursorIcon::SeResize,
     });
-    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, column: None, spot: None, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, column: None, spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
     state.queue_redraw();
     true
 }
@@ -188,19 +193,33 @@ pub fn moved(state: &mut State) {
         return;
     }
     let (dx, dy) = ((state.pointer_pos.x - d.from.x).round() as i32, (state.pointer_pos.y - d.from.y).round() as i32);
-    let Some(area) = state.layout.area_of(id).filter(|_| state.layout.is_floating(id)) else {
+    if !state.layout.is_floating(id) {
+        end(state);
+        return;
+    }
+    // Carried onto another display, it goes to that display, with the focus.
+    if resize.is_none()
+        && let Some(name) = state.output_at(state.pointer_pos).map(|o| o.name()).filter(|n| state.layout.output_of(id) != Some(n.as_str()))
+    {
+        let wins = &state.wins;
+        state.layout.move_window_to_monitor(id, &name, &|w| State::chosen_size(wins, w));
+        if let Some(d) = &mut state.drag {
+            d.crossed = true;
+        }
+    }
+    let (Some(area), Some(at)) = (state.layout.area_of(id), origin(state, id)) else {
         end(state);
         return;
     };
     match resize {
-        None => put(state, id, Rect::new(r.x + dx, r.y + dy, r.w, r.h), area, false, (false, false)),
+        None => put(state, id, Rect::new(r.x + dx - at.x, r.y + dy - at.y, r.w, r.h), area, false, (false, false)),
         Some((left, top)) => {
             let w = (if left { r.w - dx } else { r.w + dx }).max(80);
             let h = (if top { r.h - dy } else { r.h + dy }).max(60);
             // The corner across from the one held stays where it is.
             let x = if left { r.x + r.w - w } else { r.x };
             let y = if top { r.y + r.h - h } else { r.y };
-            put(state, id, Rect::new(x, y, w, h), area, true, (left, top));
+            put(state, id, Rect::new(x - at.x, y - at.y, w, h), area, true, (left, top));
         }
     }
 }
@@ -213,6 +232,13 @@ pub fn end(state: &mut State) {
         state.layout.drop_window(d.id, spot);
         state.layer_focus = None;
         state.update_focus();
+    }
+    if d.crossed
+        && let Some((r, area)) = place(state, d.id)
+    {
+        let pos = ((r.x - area.x).clamp(0, (area.w - r.w).max(0)), (r.y - area.y).clamp(0, (area.h - r.h).max(0)));
+        let f = state.layout.float(d.id);
+        state.layout.set_float(d.id, Float { pos: Some(pos), ..f });
     }
     // Where the window has ended up is where it is from now on, whatever size it settled at.
     if d.resize.is_some()

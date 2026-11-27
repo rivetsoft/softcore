@@ -421,6 +421,9 @@ it back. A floating window starts in the middle at the size it chose, and from t
   Mod+C back to the middle, Mod+Ctrl+R back to the size it chooses itself.
 - It stays where it was put, at the size it was given, through being put in a column and
   floated again. Enough of it always stays on the display to take hold of.
+- Mod+Shift+Ctrl+Left and Right take it to the next display, as they do a column, and so
+  does carrying it there with the pointer. It keeps its size and the focus, and sits as far
+  across and down the new display as it was on the old one, all of it on screen.
 
 A window shown from the scratchpad is a floating window, and all of this goes for it.
 
@@ -621,6 +624,7 @@ and moving workspaces aren't offered, as Softcore makes and drops them itself.
 ```sh
 cargo test --workspace          # the layout's rules and slides, the settings file both ways, the bindings
 softcore --headless --size 1600x900 --spawn rivet-terminal &
+softcore --headless --size 1280x800,1024x768 &  # two displays side by side, for moves between them
 softcore msg screenshot /tmp/softcore.png     # with SOFTCORE_SOCKET from its first lines
 wtype -M alt -k Return -m alt                 # keys, with WAYLAND_DISPLAY from its first lines
 wlrctl pointer click left                     # and the pointer
