@@ -3,6 +3,11 @@
 //! window from the nearest corner, or makes a column wider or narrower. A floating window's
 //! own title bar and edges work too, when it has them, and so do the keys that move and
 //! size columns.
+//!
+//! With `snap` on, a floating window being moved lines its edges up with the room's and with
+//! other floating windows' when they come close, and the pointer at an edge of the screen
+//! shows where it would go if let go of there: half the room by a side, a quarter by a
+//! corner, all of it at the top.
 
 use smithay::input::pointer::{CursorIcon, CursorImageStatus, MotionEvent};
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -34,12 +39,25 @@ pub struct Drag {
     pub spot: Option<(Spot, String, Rect)>,
     /// A floating window carried onto another display: let go of, all of it goes on that one.
     crossed: bool,
+    /// Where a floating window would snap to if let go of now, on the display named.
+    pub snap: Option<(String, Rect)>,
+    /// A snapped window, still to be given back its size once it is carried away.
+    unsnap: bool,
+    /// Where a floating window was and the size it had before it was picked up (before it
+    /// was snapped, for one that was): what snapping it now goes back to.
+    was: (Option<(i32, i32)>, Option<(i32, i32)>),
     pub mark: crate::render::Deco,
     pub mark_id: smithay::backend::renderer::element::Id,
 }
 
 /// How far a picked-up window is carried before it counts as being moved.
 const CARRY: f64 = 12.0;
+
+/// How close an edge comes to another before it is pulled onto it.
+const SNAP: i32 = 14;
+
+/// How near the pointer is to the edge of the screen for the window to snap to that side.
+const EDGE: f64 = 3.0;
 
 /// How small a carried window is drawn, so what is under it shows.
 const CARRIED: f64 = 0.5;
@@ -119,7 +137,7 @@ fn origin(state: &State, id: WinId) -> Option<Point<i32, Logical>> {
 
 fn put(state: &mut State, id: WinId, rect: Rect, area: Rect, sized: bool, hold: (bool, bool)) {
     let size = if sized { Some((rect.w, rect.h)) } else { state.layout.float(id).size };
-    state.layout.set_float(id, Float { pos: Some((rect.x - area.x, rect.y - area.y)), size, hold });
+    state.layout.set_float(id, Float { pos: Some((rect.x - area.x, rect.y - area.y)), size, hold, before: None });
     state.queue_redraw();
 }
 
@@ -140,7 +158,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
             });
             let column = (was, whole, down, near.unwrap_or(false));
             state.cursor_status = CursorImageStatus::Named(if column.2 { CursorIcon::NsResize } else { CursorIcon::EwResize });
-            state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+            state.drag = Some(Drag { id, resize: None, from, rect: Rect::new(0, 0, 0, 0), quiet, tiled: None, column: Some(column), spot: None, crossed: false, snap: None, unsnap: false, was: (None, None), mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
             state.queue_redraw();
             return true;
         }
@@ -150,7 +168,7 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
             state.tiles(o).into_iter().find(|t| t.id == id && !t.floating && !t.fullscreen && !t.hidden).map(|t| (t, Rect::new(t.rect.x + origin.x, t.rect.y + origin.y, t.rect.w, t.rect.h)))
         });
         let Some((tile, rect)) = tile.filter(|_| !resize && !state.overview.on) else { return false };
-        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), column: None, spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+        state.drag = Some(Drag { id, resize: None, from, rect, quiet, tiled: Some(tile), column: None, spot: None, crossed: false, snap: None, unsnap: false, was: (None, None), mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
         return true;
     };
     // Held among all the displays, so it can be carried from one to another.
@@ -164,9 +182,68 @@ pub fn start(state: &mut State, id: WinId, resize: bool, corner: Option<(bool, b
         Some((true, false)) => CursorIcon::SwResize,
         Some((false, false)) => CursorIcon::SeResize,
     });
-    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, column: None, spot: None, crossed: false, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
+    let f = state.layout.float(id);
+    let unsnap = resize.is_none() && f.before.is_some();
+    let was = f.before.unwrap_or((f.pos, f.size));
+    state.drag = Some(Drag { id, resize, from, rect, quiet, tiled: None, column: None, spot: None, crossed: false, snap: None, unsnap, was, mark: Default::default(), mark_id: smithay::backend::renderer::element::Id::new() });
     state.queue_redraw();
     true
+}
+
+/// A floating window's edges pulled onto the room's edges, and onto other floating windows'
+/// (or a gap away from them), where they are near. `r` is the window on its display.
+fn magnet(state: &State, id: WinId, r: Rect, area: Rect) -> Rect {
+    let o = &state.layout.opts;
+    let (b, g) = (o.border, o.gaps);
+    let outside = |r: Rect, bar: i32| Rect::new(r.x - b, r.y - b - bar, r.w + 2 * b, r.h + 2 * b + bar);
+    let me = outside(r, state.layout.bar_for(id, true));
+    let room = state.layout.room(area);
+    let (mut xs, mut ys) = (vec![room.x, room.x + room.w], vec![room.y, room.y + room.h]);
+    if let Some(output) = state.layout.output_of(id).and_then(|n| state.output_named(n)) {
+        for t in state.tiles(output).iter().filter(|t| t.floating && t.id != id && !t.hidden) {
+            let w = outside(t.rect, t.bar);
+            xs.extend([w.x, w.x + w.w, w.x - g, w.x + w.w + g]);
+            ys.extend([w.y, w.y + w.h, w.y - g, w.y + w.h + g]);
+        }
+    }
+    let pull = |at: i32, len: i32, lines: &[i32]| lines.iter().flat_map(|l| [l - at, l - at - len]).filter(|d| d.abs() <= SNAP).min_by_key(|d| d.abs()).unwrap_or(0);
+    Rect::new(r.x + pull(me.x, me.w, &xs), r.y + pull(me.y, me.h, &ys), r.w, r.h)
+}
+
+/// What the window would fill if let go of with the pointer where it is: half the room by a
+/// side of the screen, a quarter by a corner, all of it at the top. On the display named,
+/// as its area is.
+fn snap_zone(state: &State) -> Option<(String, Rect)> {
+    let output = state.output_at(state.pointer_pos)?;
+    let geo = State::output_geometry(output);
+    let (x, y) = (state.pointer_pos.x - geo.loc.x as f64, state.pointer_pos.y - geo.loc.y as f64);
+    let (w, h) = (geo.size.w as f64, geo.size.h as f64);
+    let corner = (w.min(h) / 6.0).max(40.0);
+    let (left, right, top, bottom) = (x <= EDGE, x >= w - 1.0 - EDGE, y <= EDGE, y >= h - 1.0 - EDGE);
+    let (near_left, near_right, near_top, near_bottom) = (x < corner, x > w - corner, y < corner, y > h - corner);
+    let name = output.name();
+    let room = state.layout.room(state.layout.mons.get(state.layout.monitor(&name)?)?.area);
+    let g = state.layout.opts.gaps;
+    let (hw, hh) = ((room.w - g) / 2, (room.h - g) / 2);
+    let (r, b) = (room.x + room.w - hw, room.y + room.h - hh);
+    let to = if (left && near_top) || (top && near_left) {
+        Rect::new(room.x, room.y, hw, hh)
+    } else if (right && near_top) || (top && near_right) {
+        Rect::new(r, room.y, hw, hh)
+    } else if (left && near_bottom) || (bottom && near_left) {
+        Rect::new(room.x, b, hw, hh)
+    } else if (right && near_bottom) || (bottom && near_right) {
+        Rect::new(r, b, hw, hh)
+    } else if left {
+        Rect::new(room.x, room.y, hw, room.h)
+    } else if right {
+        Rect::new(r, room.y, hw, room.h)
+    } else if top {
+        room
+    } else {
+        return None;
+    };
+    Some((name, to))
 }
 
 /// The pointer moved while a window is held.
@@ -197,6 +274,21 @@ pub fn moved(state: &mut State) {
         end(state);
         return;
     }
+    // Carried away from where it snapped to, it has its own size back, held where it was by
+    // the pointer.
+    let mut r = r;
+    if d.unsnap && (dx as f64).hypot(dy as f64) >= CARRY {
+        let from = d.from;
+        if let Some(size) = state.layout.unsnap(id) {
+            let (w, h) = size.unwrap_or((r.w, r.h));
+            let part = ((from.x - r.x as f64) / r.w.max(1) as f64).clamp(0.0, 1.0);
+            r = Rect::new((from.x - part * w as f64).round() as i32, r.y, w, h);
+        }
+        if let Some(d) = &mut state.drag {
+            d.unsnap = false;
+            d.rect = r;
+        }
+    }
     // Carried onto another display, it goes to that display, with the focus.
     if resize.is_none()
         && let Some(name) = state.output_at(state.pointer_pos).map(|o| o.name()).filter(|n| state.layout.output_of(id) != Some(n.as_str()))
@@ -212,7 +304,17 @@ pub fn moved(state: &mut State) {
         return;
     };
     match resize {
-        None => put(state, id, Rect::new(r.x + dx - at.x, r.y + dy - at.y, r.w, r.h), area, false, (false, false)),
+        None => {
+            let mut to = Rect::new(r.x + dx - at.x, r.y + dy - at.y, r.w, r.h);
+            if state.config.snap {
+                to = magnet(state, id, to, area);
+                let zone = snap_zone(state);
+                if let Some(d) = &mut state.drag {
+                    d.snap = zone;
+                }
+            }
+            put(state, id, to, area, false, (false, false));
+        }
         Some((left, top)) => {
             let w = (if left { r.w - dx } else { r.w + dx }).max(80);
             let h = (if top { r.h - dy } else { r.h + dy }).max(60);
@@ -240,12 +342,17 @@ pub fn end(state: &mut State) {
         let f = state.layout.float(d.id);
         state.layout.set_float(d.id, Float { pos: Some(pos), ..f });
     }
+    // Let go of at an edge of the screen: it fills that part of the room.
+    if let Some((_, to)) = d.snap {
+        state.layout.set_float(d.id, Float { pos: d.was.0, size: d.was.1, ..Default::default() });
+        state.layout.snap_float(d.id, to);
+    }
     // Where the window has ended up is where it is from now on, whatever size it settled at.
     if d.resize.is_some()
         && let Some((r, area)) = place(state, d.id)
     {
         let size = state.layout.float(d.id).size;
-        state.layout.set_float(d.id, Float { pos: Some((r.x - area.x, r.y - area.y)), size, hold: (false, false) });
+        state.layout.set_float(d.id, Float { pos: Some((r.x - area.x, r.y - area.y)), size, ..Default::default() });
     }
     state.cursor_status = CursorImageStatus::default_named();
     if let Some(pointer) = state.seat.get_pointer() {
@@ -278,10 +385,30 @@ pub fn action(state: &mut State, action: &Action) -> bool {
         Action::SetColumnWidth(c) => put(state, id, Rect::new(r.x, r.y, part(area.w, c, r.w), r.h), area, true, (false, false)),
         Action::SetWindowHeight(c) => put(state, id, Rect::new(r.x, r.y, r.w, part(area.h, c, r.h)), area, true, (false, false)),
         // Back to the size it chooses itself, and back to the middle.
-        Action::ResetWindowHeight => state.layout.set_float(id, Float { pos: state.layout.float(id).pos, size: None, hold: (false, false) }),
-        Action::CenterColumn => state.layout.set_float(id, Float { pos: None, size: state.layout.float(id).size, hold: (false, false) }),
+        Action::ResetWindowHeight => state.layout.set_float(id, Float { pos: state.layout.float(id).pos, ..Default::default() }),
+        Action::CenterColumn => state.layout.set_float(id, Float { size: state.layout.float(id).size, ..Default::default() }),
+        Action::MaximizeColumn => state.layout.toggle_float_maximized(id),
+        // On a workspace of floating windows only, the focus goes to the nearest one that way.
+        Action::Focus(d) if state.layout.active_workspace().is_some_and(|w| w.cols.is_empty()) => {
+            let Some(output) = state.layout.output_of(id).and_then(|n| state.output_named(n)) else { return true };
+            let mid = |r: &Rect| (r.x + r.w / 2, r.y + r.h / 2);
+            let (cx, cy) = mid(&r);
+            let next = state.tiles(output).into_iter().filter(|t| t.floating && t.id != id && !t.hidden).filter_map(|t| {
+                let (x, y) = mid(&t.rect);
+                let (along, across) = match d {
+                    Dir::Left => (cx - x, y - cy),
+                    Dir::Right => (x - cx, y - cy),
+                    Dir::Up => (cy - y, x - cx),
+                    Dir::Down => (y - cy, x - cx),
+                };
+                (along > 0).then_some((along + 2 * across.abs(), t.id))
+            });
+            if let Some((_, to)) = next.min() {
+                state.layout.focus_window(to);
+            }
+        }
         // These are about columns; a floating window has none.
-        Action::SwitchPresetWidth | Action::MaximizeColumn | Action::ConsumeOrExpel(_) => {}
+        Action::SwitchPresetWidth | Action::ConsumeOrExpel(_) => {}
         _ => return false,
     }
     true

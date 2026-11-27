@@ -29,7 +29,7 @@ impl Rect {
     }
 }
 
-pub use softcore_settings::{Dir, Options, Scroll};
+pub use softcore_settings::{Dir, Options, Scroll, TitleBars, WindowLayout};
 
 /// The same rectangle with across and down changed over: a strip that runs down the screen
 /// is laid out as one that runs across it, and turned.
@@ -72,11 +72,16 @@ pub struct Workspace {
     pub name: Option<String>,
     /// Which way its own line in the settings says it scrolls.
     pub named_scroll: Option<Scroll>,
+    /// How it places its windows, when it was told: it keeps that wherever it goes. None: as
+    /// the display it is on does.
+    pub layout: Option<WindowLayout>,
+    /// How its own line in the settings says it places them.
+    pub named_layout: Option<WindowLayout>,
 }
 
 impl Workspace {
     fn new(id: u64) -> Workspace {
-        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new(), scroll: None, name: None, named_scroll: None }
+        Workspace { id, cols: Vec::new(), active: 0, view: 0.0, view_to: 0.0, floating: Vec::new(), float_focus: None, fullscreen: None, home: String::new(), scroll: None, name: None, named_scroll: None, layout: None, named_layout: None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -197,6 +202,9 @@ pub struct Monitor {
     /// Which way its windows scroll, when its own line in the settings says. None: as the
     /// `scroll` setting says.
     pub scroll: Option<Scroll>,
+    /// How its workspaces place their windows, when its own line says. None: as the `layout`
+    /// setting says.
+    pub layout: Option<WindowLayout>,
 }
 
 impl Monitor {
@@ -218,6 +226,12 @@ impl Monitor {
             Some(Scroll::Auto) => self.size.1 > self.size.0,
             None => self.vertical(o),
         }
+    }
+
+    /// Whether one of its workspaces floats every window: as the workspace was told, else as
+    /// its line in the settings says, else as the display does.
+    pub fn ws_floats(&self, ws: &Workspace, o: &Options) -> bool {
+        ws.layout.or(ws.named_layout).or(self.layout).unwrap_or(o.layout) == WindowLayout::Floating
     }
 
     /// The room for windows as a strip sees it: along the strip is always across.
@@ -245,6 +259,8 @@ pub struct Tile {
     pub zoom: f64,
     /// In a tabbed column: its piece of the strip of tabs.
     pub tab: Option<Rect>,
+    /// How tall Softcore's title bar over it is, drawn above `rect`; 0: it has none.
+    pub bar: i32,
     /// A tab that isn't the one showing: it has its size and its piece of the strip, and
     /// isn't drawn.
     pub hidden: bool,
@@ -260,6 +276,9 @@ pub struct Float {
     /// While it is resized by its left or its top edge: the right, the bottom edge is what
     /// stays put, whatever size the window itself has got to so far.
     pub hold: (bool, bool),
+    /// Snapped to part of the display, or filling it: where it was and the size it had
+    /// before, to go back to.
+    pub before: Option<(Option<(i32, i32)>, Option<(i32, i32)>)>,
 }
 
 /// Where a window let go of with the pointer goes: by a window that is already there.
@@ -277,6 +296,9 @@ pub enum Spot {
 
 /// Between two pieces of a strip of tabs.
 const TAB_GAP: i32 = 4;
+
+/// How far each window opening in the middle on a floating workspace sits from the last.
+const CASCADE: i32 = 36;
 
 /// How much of a floating window always stays on its display, to take hold of.
 const HOLD: i32 = 48;
@@ -303,6 +325,14 @@ pub struct Layout {
     scratch_names: HashMap<WinId, String>,
     /// How much of the screen a named scratchpad's window takes, where its line says.
     scratch_sizes: HashMap<String, f64>,
+    /// Windows a rule, a key or being a dialog floated or put in a column: the others go as
+    /// their workspace places windows.
+    chosen: HashMap<WinId, bool>,
+    /// Windows whose rule says whether they have a title bar, whatever the setting says.
+    bar_rules: HashMap<WinId, bool>,
+    /// Windows opened floating by their workspace while others sat in the middle already:
+    /// how many steps down and to the right of the middle each opens, so none hides another.
+    cascade: HashMap<WinId, i32>,
     /// Fingers on the touchpad, moving what is in view.
     swipe: Option<Swipe>,
 }
@@ -319,7 +349,8 @@ struct Swipe {
 /// How a window opens.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Open<'a> {
-    pub floating: bool,
+    /// None: as the workspace it opens on places windows.
+    pub floating: Option<bool>,
     pub output: Option<&'a str>,
     pub workspace: Option<&'a WorkspaceRef>,
     /// Part of the screen's width.
@@ -331,7 +362,7 @@ pub struct Open<'a> {
 
 impl Default for Open<'_> {
     fn default() -> Self {
-        Open { floating: false, output: None, workspace: None, width: None, maximized: false, focus: true }
+        Open { floating: None, output: None, workspace: None, width: None, maximized: false, focus: true }
     }
 }
 
@@ -347,7 +378,7 @@ pub enum Scratch {
 
 impl Layout {
     pub fn new(opts: Options) -> Layout {
-        Layout { mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), floats: HashMap::new(), scratch: Vec::new(), shown: Vec::new(), scratch_names: HashMap::new(), scratch_sizes: HashMap::new(), swipe: None }
+        Layout { chosen: HashMap::new(), bar_rules: HashMap::new(), cascade: HashMap::new(), mons: Vec::new(), active_mon: 0, opts, next_ws: 1, places: HashMap::new(), offsets: HashMap::new(), heights: HashMap::new(), floats: HashMap::new(), scratch: Vec::new(), shown: Vec::new(), scratch_names: HashMap::new(), scratch_sizes: HashMap::new(), swipe: None }
     }
 
     fn new_ws(&mut self) -> Workspace {
@@ -367,7 +398,7 @@ impl Layout {
             m.area = area;
         } else if !self.mons.iter().any(|m| m.name == name) {
             let ws = self.new_ws();
-            let mut new = Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false, scroll: None };
+            let mut new = Monitor { name: name.to_string(), wss: vec![ws], active: 0, pos: 0.0, size, area, orphan: false, scroll: None, layout: None };
             // Back after being away: the workspaces that went to other displays come home.
             for m in &mut self.mons {
                 let mut i = 0;
@@ -430,6 +461,30 @@ impl Layout {
             m.scroll = scroll;
             self.settle();
         }
+    }
+
+    /// What a display's own line in the settings says about how its workspaces place windows.
+    pub fn set_output_layout(&mut self, name: &str, layout: Option<WindowLayout>) {
+        let Some(m) = self.mons.iter_mut().find(|m| m.name == name) else { return };
+        if m.layout != layout {
+            m.layout = layout;
+            self.settle();
+        }
+    }
+
+    /// Whether the workspace in view on the focused display floats every window.
+    pub fn floats(&self) -> bool {
+        self.active_monitor().is_some_and(|m| m.wss.get(m.active).is_some_and(|ws| m.ws_floats(ws, &self.opts)))
+    }
+
+    /// Tell the workspace in view how to place its windows. `Some(None)`: as its display does.
+    /// None: floating if it scrolls, scrolling if it floats. The windows nothing else has
+    /// floated or tiled go along: floated where they stand, or put back in columns.
+    pub fn set_workspace_layout(&mut self, to: Option<Option<WindowLayout>>) {
+        let now = self.floats();
+        let Some(ws) = self.ws() else { return };
+        ws.layout = to.unwrap_or(Some(if now { WindowLayout::Scrolling } else { WindowLayout::Floating }));
+        self.settle();
     }
 
     /// Whether the workspace in view on the focused display scrolls up and down.
@@ -520,6 +575,11 @@ impl Layout {
         ws.cols.iter().enumerate().find_map(|(c, col)| col.wins.iter().position(|w| *w == id).map(|r| (c + 1, r + 1)))
     }
 
+    /// Whether a window's column is as wide as the screen allows.
+    pub fn column_maximized(&self, id: WinId) -> bool {
+        self.find(id).is_some_and(|(mi, wi)| self.mons[mi].wss[wi].cols.iter().any(|c| c.maximized && c.wins.contains(&id)))
+    }
+
     pub fn is_floating(&self, id: WinId) -> bool {
         self.find(id).is_some_and(|(mi, wi)| self.mons[mi].wss[wi].floating.contains(&id))
     }
@@ -529,21 +589,42 @@ impl Layout {
     /// A new window: a column of its own, right of the focused one (or floating over them).
     #[cfg(test)]
     pub fn add_window(&mut self, id: WinId, floating: bool, on: Option<&str>) {
-        self.open_window(id, Open { floating, output: on, ..Default::default() });
+        self.open_window(id, Open { floating: floating.then_some(true), output: on, ..Default::default() });
+    }
+
+    /// The workspace a new window opens on: the one it names, else the one in view on the
+    /// display it names, else the one with the focus.
+    fn opens_on(&self, output: Option<&str>, workspace: Option<&WorkspaceRef>) -> Option<(usize, usize)> {
+        match workspace.and_then(|w| self.workspace_at(w)) {
+            Some(at) => Some(at),
+            None => {
+                let mi = output.and_then(|n| self.monitor(n)).unwrap_or(self.active_mon);
+                self.mons.get(mi).map(|m| (mi, m.active))
+            }
+        }
+    }
+
+    /// Whether a window opening there would float, where nothing else says.
+    pub fn floats_new(&self, output: Option<&str>, workspace: Option<&WorkspaceRef>) -> bool {
+        self.opens_on(output, workspace).is_some_and(|(mi, wi)| self.mons[mi].ws_floats(&self.mons[mi].wss[wi], &self.opts))
     }
 
     /// A new window, where and how its rules say.
     pub fn open_window(&mut self, id: WinId, open: Open) {
-        // The workspace it names, else the one in view on the display it names, else the
-        // one with the focus.
-        let (mi, wi) = match open.workspace.and_then(|w| self.workspace_at(w)) {
-            Some(at) => at,
-            None => {
-                let mi = open.output.and_then(|n| self.monitor(n)).unwrap_or(self.active_mon);
-                let Some(m) = self.mons.get(mi) else { return };
-                (mi, m.active)
+        let Some((mi, wi)) = self.opens_on(open.output, open.workspace) else { return };
+        let floating = match open.floating {
+            Some(f) => {
+                self.chosen.insert(id, f);
+                f
             }
+            None => self.mons[mi].ws_floats(&self.mons[mi].wss[wi], &self.opts),
         };
+        if floating && open.floating.is_none() {
+            let middle = self.mons[mi].wss[wi].floating.iter().filter(|w| self.float(**w).pos.is_none()).count() as i32;
+            if middle > 0 {
+                self.cascade.insert(id, middle % 8);
+            }
+        }
         let width = open.width.unwrap_or(self.opts.default_width);
         let ws = &mut self.mons[mi].wss[wi];
         let was = (ws.active, ws.float_focus, ws.cols.is_empty() && ws.floating.is_empty());
@@ -551,7 +632,7 @@ impl Layout {
             // It is not to open out of sight behind a window that has the whole screen.
             ws.fullscreen = None;
         }
-        if open.floating {
+        if floating {
             ws.floating.push(id);
             ws.float_focus = Some(id);
         } else {
@@ -564,7 +645,7 @@ impl Layout {
             // The focus stays with what had it. The new column went in after it.
             ws.active = was.0;
             ws.float_focus = was.1;
-            if open.floating && was.1.is_some() {
+            if floating && was.1.is_some() {
                 // Under the floating window that has the focus, not over it.
                 let n = ws.floating.len();
                 ws.floating.swap(n - 1, n - 2);
@@ -578,7 +659,7 @@ impl Layout {
     /// The workspaces the settings name, in their order: each is made if it isn't there,
     /// on the display it asks for, and kept when empty. One whose line has gone is a
     /// workspace like any other again.
-    pub fn set_named_workspaces(&mut self, wanted: &[(String, Option<String>, Option<Scroll>)]) {
+    pub fn set_named_workspaces(&mut self, wanted: &[(String, Option<String>, Option<Scroll>, Option<WindowLayout>)]) {
         if self.mons.is_empty() {
             return;
         }
@@ -586,9 +667,10 @@ impl Layout {
             if ws.name.as_ref().is_some_and(|n| !wanted.iter().any(|w| w.0 == *n)) {
                 ws.name = None;
                 ws.named_scroll = None;
+                ws.named_layout = None;
             }
         }
-        for (name, output, scroll) in wanted {
+        for (name, output, scroll, layout) in wanted {
             let to = output.as_deref().and_then(|o| self.monitor(o));
             let at = self.workspace_at(&WorkspaceRef::Name(name.clone()));
             let mut ws = match at {
@@ -596,6 +678,7 @@ impl Layout {
                 Some((mi, wi)) if to.is_none_or(|t| t == mi) => {
                     let ws = &mut self.mons[mi].wss[wi];
                     ws.named_scroll = *scroll;
+                    ws.named_layout = *layout;
                     if let Some(o) = output {
                         ws.home.clone_from(o);
                     }
@@ -617,6 +700,7 @@ impl Layout {
                 }
             };
             ws.named_scroll = *scroll;
+            ws.named_layout = *layout;
             ws.home = output.clone().unwrap_or_default();
             // After the named ones already there, before the rest.
             let m = &mut self.mons[to.unwrap_or(0)];
@@ -702,6 +786,9 @@ impl Layout {
     }
 
     pub fn remove_window(&mut self, id: WinId) {
+        self.chosen.remove(&id);
+        self.bar_rules.remove(&id);
+        self.cascade.remove(&id);
         self.scratch.retain(|w| *w != id);
         self.shown.retain(|w| *w != id);
         self.scratch_names.remove(&id);
@@ -1076,14 +1163,14 @@ impl Layout {
         let floating = self.mons[mi].wss[wi].floating.contains(&id);
         if floating && self.float(id).pos.is_some() {
             let (from, area) = (self.mons[mi].area, self.mons[to].area);
-            let r = self.float_rect(id, &from, self.float_size(id).unwrap_or_else(|| float_size(id)));
+            let r = self.float_rect(id, &from, self.float_size(id).unwrap_or_else(|| float_size(id)), self.bar_for(id, true));
             let across = |at: i32, room: i32, len: i32, to_room: i32| {
                 let part = if room > len { (at as f64 / (room - len) as f64).clamp(0.0, 1.0) } else { 0.5 };
                 (part * (to_room - len.min(to_room)) as f64).round() as i32
             };
             let pos = (across(r.x - from.x, from.w, r.w, area.w), across(r.y - from.y, from.h, r.h, area.h));
             let size = self.float(id).size;
-            self.floats.insert(id, Float { pos: Some(pos), size, hold: (false, false) });
+            self.floats.insert(id, Float { pos: Some(pos), size, ..Default::default() });
         }
         let width = self.opts.default_width;
         self.mons[mi].wss[wi].remove(id);
@@ -1188,20 +1275,83 @@ impl Layout {
 
     /// Where a floating window of the size it has is drawn in the part of a display panels
     /// leave free: where it was put, else the middle, and never so far off that it can't be
-    /// reached.
-    fn float_rect(&self, id: WinId, area: &Rect, size: (i32, i32)) -> Rect {
-        let (w, h) = (size.0.clamp(1, area.w.max(1)), size.1.clamp(1, area.h.max(1)));
+    /// reached. `bar`: its title bar, which goes above it and stays on the display too.
+    fn float_rect(&self, id: WinId, area: &Rect, size: (i32, i32), bar: i32) -> Rect {
+        let (w, h) = (size.0.clamp(1, area.w.max(1)), size.1.clamp(1, (area.h - bar).max(1)));
         let f = self.float(id);
         let (x, y) = match f.pos {
             Some((x, y)) => {
                 let (rw, rh) = f.size.unwrap_or((w, h));
                 (area.x + x + if f.hold.0 { rw - w } else { 0 }, area.y + y + if f.hold.1 { rh - h } else { 0 })
             }
-            None => (area.x + (area.w - w) / 2, area.y + (area.h - h) / 2),
+            None => {
+                let k = self.cascade.get(&id).copied().unwrap_or(0) * CASCADE;
+                (area.x + (area.w - w) / 2 + k, area.y + bar + (area.h - bar - h) / 2 + k)
+            }
         };
         let x = x.min(area.x + area.w - HOLD).max(area.x + HOLD - w);
-        let y = y.min(area.y + area.h - HOLD).max(area.y);
+        let y = y.min(area.y + area.h - HOLD).max(area.y + bar);
         Rect::new(x, y, w, h)
+    }
+
+    /// How tall a window's title bar is, 0 for none: as its rule says, else as the setting
+    /// says for a window that floats or not.
+    pub fn bar_for(&self, id: WinId, floating: bool) -> i32 {
+        self.bar_height(self.bar_rules.get(&id).copied(), floating)
+    }
+
+    /// How tall the title bar of a window with this rule is.
+    pub fn bar_height(&self, rule: Option<bool>, floating: bool) -> i32 {
+        let on = rule.unwrap_or(match self.opts.title_bars {
+            TitleBars::Off => false,
+            TitleBars::Floating => floating,
+            TitleBars::On => true,
+        });
+        if on { self.opts.title_bar } else { 0 }
+    }
+
+    /// What a window's rule says about its title bar.
+    pub fn set_bar_rule(&mut self, id: WinId, rule: Option<bool>) {
+        match rule {
+            Some(on) => self.bar_rules.insert(id, on),
+            None => self.bar_rules.remove(&id),
+        };
+    }
+
+    /// The room a floating window may fill: what panels leave, less the gaps at the edges.
+    pub fn room(&self, area: Rect) -> Rect {
+        let g = self.opts.gaps_out;
+        Rect::new(area.x + g, area.y + g, (area.w - 2 * g).max(1), (area.h - 2 * g).max(1))
+    }
+
+    /// Make a floating window fill `outer` (on its display, as its area is), its border and
+    /// title bar inside it, remembering where it was to go back to.
+    pub fn snap_float(&mut self, id: WinId, outer: Rect) {
+        let Some(area) = self.area_of(id) else { return };
+        let (b, t) = (self.opts.border, self.bar_for(id, true));
+        let r = Rect::new(outer.x + b, outer.y + b + t, (outer.w - 2 * b).max(1), (outer.h - 2 * b - t).max(1));
+        let f = self.float(id);
+        let before = f.before.or(Some((f.pos, f.size)));
+        self.floats.insert(id, Float { pos: Some((r.x - area.x, r.y - area.y)), size: Some((r.w.max(80), r.h.max(60))), hold: (false, false), before });
+    }
+
+    /// A floating window fills the room on its display, or goes back to how it was.
+    pub fn toggle_float_maximized(&mut self, id: WinId) {
+        if self.float(id).before.is_some() {
+            self.unsnap(id);
+            return;
+        }
+        if let Some(area) = self.area_of(id) {
+            self.snap_float(id, self.room(area));
+        }
+    }
+
+    /// Back to where a snapped floating window was and the size it had. The size it goes
+    /// back to, when it had one; None when it wasn't snapped.
+    pub fn unsnap(&mut self, id: WinId) -> Option<Option<(i32, i32)>> {
+        let (pos, size) = self.float(id).before?;
+        self.floats.insert(id, Float { pos, size, ..Default::default() });
+        Some(size)
     }
 
     /// The display a window is on, by its name.
@@ -1232,6 +1382,16 @@ impl Layout {
     pub fn toggle_floating(&mut self, id: WinId) {
         let Some((mi, wi)) = self.find(id) else { return };
         let width = self.opts.default_width;
+        // Back to how its workspace places windows, it goes along with that again; the other
+        // way, it stays as it is put.
+        let floats = self.mons[mi].ws_floats(&self.mons[mi].wss[wi], &self.opts);
+        let ws = &mut self.mons[mi].wss[wi];
+        let now = !ws.floating.contains(&id);
+        if now == floats {
+            self.chosen.remove(&id);
+        } else {
+            self.chosen.insert(id, now);
+        }
         let ws = &mut self.mons[mi].wss[wi];
         if ws.floating.contains(&id) {
             // Into a column, it is a window like any other again.
@@ -1411,6 +1571,7 @@ impl Layout {
     /// After any change: an empty workspace last and nowhere else (but the one in view), and
     /// each strip scrolled to its focused column.
     fn settle(&mut self) {
+        self.follow_layouts();
         let o = self.opts.clone();
         for mi in 0..self.mons.len() {
             let mut i = 0;
@@ -1446,6 +1607,65 @@ impl Layout {
             self.active_mon = 0;
         }
         self.note_places();
+    }
+
+    /// The windows nothing has floated or tiled on purpose go as their workspace places
+    /// windows: a workspace that floats floats them where they stand on screen, at the size
+    /// they have; one that scrolls puts them in columns, left to right as they stood.
+    fn follow_layouts(&mut self) {
+        let o = self.opts.clone();
+        for mi in 0..self.mons.len() {
+            for wi in 0..self.mons[mi].wss.len() {
+                let m = &self.mons[mi];
+                let ws = &m.wss[wi];
+                let free = |id: &WinId| !self.chosen.contains_key(id) && !self.shown.contains(id) && ws.fullscreen != Some(*id);
+                let vertical = m.ws_vertical(ws, &o);
+                if m.ws_floats(ws, &o) {
+                    let ids: Vec<WinId> = ws.cols.iter().flat_map(|c| c.wins.iter().copied()).filter(free).collect();
+                    if ids.is_empty() {
+                        continue;
+                    }
+                    let (area, view, focus) = (m.area, ws.view_to.round() as i32, ws.active_window());
+                    let at: Vec<(WinId, Rect)> = ids
+                        .iter()
+                        .filter_map(|id| {
+                            let (_, r) = self.places.get(id)?;
+                            Some((*id, if vertical { Rect::new(r.x, r.y - view, r.w, r.h) } else { Rect::new(r.x - view, r.y, r.w, r.h) }))
+                        })
+                        .collect();
+                    let ws = &mut self.mons[mi].wss[wi];
+                    for id in &ids {
+                        ws.remove(*id);
+                        ws.floating.push(*id);
+                    }
+                    if let Some(f) = focus.filter(|f| ids.contains(f)) {
+                        ws.floating.retain(|w| *w != f);
+                        ws.floating.push(f);
+                        ws.float_focus = Some(f);
+                    }
+                    for (id, r) in at {
+                        let (x, y) = ((r.x - area.x).clamp(0, (area.w - r.w).max(0)), (r.y - area.y).clamp(0, (area.h - r.h).max(0)));
+                        self.floats.insert(id, Float { pos: Some((x, y)), size: Some((r.w, r.h)), ..Default::default() });
+                    }
+                } else {
+                    let mut ids: Vec<WinId> = ws.floating.iter().copied().filter(free).collect();
+                    if ids.is_empty() {
+                        continue;
+                    }
+                    ids.sort_by_key(|id| self.floats.get(id).and_then(|f| f.pos).map_or(0, |p| if vertical { p.1 } else { p.0 }));
+                    let ws = &mut self.mons[mi].wss[wi];
+                    let focus = ws.float_focus.filter(|f| ids.contains(f));
+                    for id in &ids {
+                        ws.floating.retain(|w| w != id);
+                        ws.cols.push(Column { wins: vec![*id], active: 0, width: o.default_width, maximized: false, tabbed: false });
+                    }
+                    if let Some(f) = focus {
+                        ws.float_focus = None;
+                        ws.active = ws.cols.iter().position(|c| c.wins.contains(&f)).unwrap_or(ws.active);
+                    }
+                }
+            }
+        }
     }
 
     /// See where every tiled window stands on its strip now. One that stood elsewhere on the
@@ -1576,6 +1796,9 @@ impl Layout {
                     rect = turned(rect);
                     tab = tab.map(turned);
                 }
+                let bar = self.bar_for(*id, false);
+                rect.y += bar;
+                rect.h = (rect.h - bar).max(1);
                 // The strip goes along with a column that is sliding to its place.
                 if let (Some(t), Some(o)) = (&mut tab, self.offsets.get(id).filter(|_| sliding)) {
                     if vertical { t.y += o[1].round() as i32 } else { t.x += o[0].round() as i32 }
@@ -1585,14 +1808,15 @@ impl Layout {
                     rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
                 }
                 if ws.fullscreen != Some(*id) {
-                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0), zoom: 1.0, tab, hidden: col.tabbed && ri != col.active });
+                    out.push(Tile { id: *id, rect, border: b > 0, active, floating: false, fullscreen: false, moving: off.is_some(), resizing: off.is_some_and(|o| o[2] != 0.0 || o[3] != 0.0), zoom: 1.0, tab, bar, hidden: col.tabbed && ri != col.active });
                 }
             }
         }
         for id in &ws.floating {
-            let rect = self.float_rect(*id, &m.area, float_size(*id));
+            let bar = self.bar_for(*id, true);
+            let rect = self.float_rect(*id, &m.area, float_size(*id), bar);
             if ws.fullscreen != Some(*id) {
-                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0, tab: None, hidden: false });
+                out.push(Tile { id: *id, rect, border: b > 0, active: focused && ws.float_focus == Some(*id), floating: true, fullscreen: false, moving: false, resizing: false, zoom: 1.0, tab: None, bar, hidden: false });
             }
         }
         if let Some(id) = ws.fullscreen {
@@ -1604,7 +1828,7 @@ impl Layout {
             if let Some(o) = off {
                 rect = Rect::new(rect.x + o[0].round() as i32, rect.y + o[1].round() as i32, (rect.w + o[2].round() as i32).max(1), (rect.h + o[3].round() as i32).max(1));
             }
-            out.push(Tile { id, rect, border: false, active: focused, floating: false, fullscreen: true, moving: off.is_some(), resizing: off.is_some(), zoom: 1.0, tab: None, hidden: false });
+            out.push(Tile { id, rect, border: false, active: focused, floating: false, fullscreen: true, moving: off.is_some(), resizing: off.is_some(), zoom: 1.0, tab: None, bar: 0, hidden: false });
         }
     }
 
@@ -1672,7 +1896,8 @@ impl Layout {
     }
 
     /// The size a window about to open would get, so its first frame is already the right one.
-    pub fn new_window_size(&self, on: Option<&str>) -> Option<(i32, i32)> {
+    /// `bar`: how tall its title bar is.
+    pub fn new_window_size(&self, on: Option<&str>, bar: i32) -> Option<(i32, i32)> {
         let m = on.and_then(|n| self.monitor(n)).and_then(|i| self.mons.get(i)).or(self.mons.get(self.active_mon))?;
         let o = &self.opts;
         let vertical = m.wss.get(m.active).is_some_and(|ws| m.ws_vertical(ws, o));
@@ -1680,7 +1905,8 @@ impl Layout {
         let full = area.w - 2 * o.gaps_out;
         let w = (((full + o.gaps) as f64) * o.default_width).round() as i32 - o.gaps;
         let (w, h) = ((w - 2 * o.border).max(1), (area.h - 2 * o.gaps_out - 2 * o.border).max(1));
-        Some(if vertical { (h, w) } else { (w, h) })
+        let (w, h) = if vertical { (h, w) } else { (w, h) };
+        Some((w, (h - bar).max(1)))
     }
 }
 
@@ -1728,7 +1954,7 @@ mod tests {
         l.focus(Dir::Left);
         assert_eq!(l.active_window(), Some(1));
         // A new window is asked to be the size of a row.
-        assert_eq!(l.new_window_size(None), Some((976, 281)));
+        assert_eq!(l.new_window_size(None, 0), Some((976, 281)));
         // Sideways again, the same windows are columns.
         l.set_options(Options { scroll: Scroll::Horizontal, ..l.opts.clone() });
         l.finish_animations();
@@ -1863,7 +2089,7 @@ mod tests {
         l.move_column_to_monitor(1, &fs);
         assert_eq!((l.float(2).pos, l.float_size(2)), (Some((200, 0)), Some((600, 500))));
         // Opened by a rule on a display, it floats there.
-        l.open_window(3, Open { floating: true, output: Some("A"), ..Default::default() });
+        l.open_window(3, Open { floating: Some(true), output: Some("A"), ..Default::default() });
         assert_eq!((l.output_of(3), l.is_floating(3), l.active_window()), (Some("A"), true, Some(3)));
     }
 
@@ -1993,7 +2219,7 @@ mod tests {
         assert_eq!(rect(&l), Rect::new(-252, 552, 300, 200));
         // Resized by its left and top edges, its far corner stays where it is while the
         // window itself is still the old size.
-        l.set_float(1, Float { pos: Some((100, 100)), size: Some((400, 300)), hold: (true, true) });
+        l.set_float(1, Float { pos: Some((100, 100)), size: Some((400, 300)), hold: (true, true), before: None });
         assert_eq!(rect(&l), Rect::new(200, 200, 300, 200));
     }
 
@@ -2036,7 +2262,7 @@ mod tests {
         assert_eq!(t[0].rect, Rect::new(12, 12, 481, 576));
         assert_eq!(t[1].rect, Rect::new(507, 12, 481, 576));
         assert!(t[1].active && !t[0].active);
-        assert_eq!(l.new_window_size(None), Some((481, 576)));
+        assert_eq!(l.new_window_size(None, 0), Some((481, 576)));
     }
 
     #[test]
@@ -2101,7 +2327,7 @@ mod tests {
     fn named_workspaces_stay_and_are_found_by_name() {
         let mut l = layout();
         l.add_window(1, false, None);
-        l.set_named_workspaces(&[("chat".into(), None, Some(Scroll::Vertical)), ("mail".into(), Some("B".into()), None)]);
+        l.set_named_workspaces(&[("chat".into(), None, Some(Scroll::Vertical), None), ("mail".into(), Some("B".into()), None, None)]);
         // First in the stack, in the settings' order; what was in view still is.
         assert_eq!(names(&l, 0), vec![Some("chat"), Some("mail"), None, None]);
         assert_eq!((l.mons[0].active, l.active_window()), (2, Some(1)));
@@ -2114,13 +2340,13 @@ mod tests {
         assert_eq!(names(&l, 0), vec![Some("chat"), Some("mail"), None]);
         // Its display arrives: it goes there with what is on it, and can be gone to by name.
         l.add_monitor("B", (800, 600));
-        l.set_named_workspaces(&[("chat".into(), None, None), ("mail".into(), Some("B".into()), None)]);
+        l.set_named_workspaces(&[("chat".into(), None, None, None), ("mail".into(), Some("B".into()), None, None)]);
         assert_eq!((names(&l, 0), names(&l, 1)), (vec![Some("chat"), None], vec![Some("mail"), None]));
         l.active_mon = 0;
         l.focus_workspace_ref(&WorkspaceRef::Name("mail".into()));
         assert_eq!((l.active_mon, l.active_window()), (1, Some(1)));
         // Its line goes: it is a workspace like any other, and goes when it is empty.
-        l.set_named_workspaces(&[("mail".into(), Some("B".into()), None)]);
+        l.set_named_workspaces(&[("mail".into(), Some("B".into()), None, None)]);
         assert_eq!(names(&l, 0), vec![None]);
     }
 
@@ -2172,7 +2398,7 @@ mod tests {
     #[test]
     fn a_window_opens_where_and_how_it_is_told() {
         let mut l = layout();
-        l.set_named_workspaces(&[("chat".into(), None, None)]);
+        l.set_named_workspaces(&[("chat".into(), None, None, None)]);
         l.focus_workspace(1);
         l.add_window(1, false, None);
         // On another workspace without the focus: nothing in view changes.
@@ -2184,7 +2410,7 @@ mod tests {
         l.open_window(3, Open { focus: false, ..Default::default() });
         assert_eq!((l.active_window(), l.position(3)), (Some(1), Some((2, 1))));
         // And with the focus, the workspace it names comes into view.
-        l.open_window(4, Open { workspace: Some(&chat), floating: true, ..Default::default() });
+        l.open_window(4, Open { workspace: Some(&chat), floating: Some(true), ..Default::default() });
         assert_eq!((l.mons[0].active, l.active_window(), l.is_floating(4)), (0, Some(4), true));
     }
 
@@ -2331,5 +2557,93 @@ mod tests {
         assert_eq!((l.find(1).map(|p| p.0), l.find(3).map(|p| p.0), l.mons[0].name.as_str()), (Some(0), Some(0), "C"));
         l.add_monitor("B", (800, 600));
         assert_eq!((l.find(1).map(|p| p.0), l.find(3).map(|p| p.0)), (Some(0), Some(1)));
+    }
+    #[test]
+    fn a_workspace_floats_every_window_where_it_stands() {
+        let mut l = layout();
+        l.add_window(1, false, None);
+        l.add_window(2, false, None);
+        l.open_window(3, Open { floating: Some(true), ..Default::default() });
+        let rect = |l: &Layout, id| l.tiles(0, &fs).iter().find(|t| t.id == id).map(|t| (t.floating, t.rect));
+        let was = (rect(&l, 1), rect(&l, 2));
+        l.set_workspace_layout(None);
+        assert!(l.floats());
+        // Floated where they stood, at the size they had, the focus kept.
+        assert_eq!((was.0.map(|r| r.1), was.1.map(|r| r.1)), (Some(Rect::new(12, 12, 481, 576)), Some(Rect::new(507, 12, 481, 576))));
+        assert_eq!((l.is_floating(1), l.float(1).pos, l.float_size(1)), (true, Some((12, 12)), Some((481, 576))));
+        assert_eq!((l.float(2).pos, l.float_size(2)), (Some((507, 12)), Some((481, 576))));
+        assert_eq!(l.active_window(), Some(3));
+        // A new window floats too, and one put in a column stays there.
+        l.add_window(4, false, None);
+        assert!(l.is_floating(4));
+        // Not on top of the one already in the middle: a step down and across from it.
+        assert_eq!(rect(&l, 4).map(|r| r.1), Some(Rect::new(386, 236, 300, 200)));
+        l.toggle_floating(4);
+        assert!(!l.is_floating(4));
+        // Back to scrolling: columns again, left to right as they stood. The window floated
+        // on purpose stays floating.
+        l.set_workspace_layout(None);
+        let cols = l.active_workspace().unwrap().cols.iter().map(|c| c.wins.clone()).collect::<Vec<_>>();
+        assert_eq!(cols, vec![vec![4], vec![1], vec![2]]);
+        assert!(l.is_floating(3));
+        assert_eq!(rect(&l, 1).map(|r| r.0), Some(false));
+        // Floated by the key on a scrolling workspace, it floats on a floating one too.
+        l.toggle_floating(1);
+        l.set_workspace_layout(Some(Some(WindowLayout::Floating)));
+        l.set_workspace_layout(Some(None));
+        assert!(l.is_floating(1) && !l.is_floating(2));
+    }
+
+    #[test]
+    fn the_setting_a_display_and_a_workspace_say_how_windows_are_placed() {
+        let mut l = Layout::new(Options { layout: WindowLayout::Floating, ..Options::default() });
+        l.add_monitor("A", (1000, 600));
+        assert!(l.floats_new(None, None));
+        l.add_window(1, false, None);
+        assert!(l.is_floating(1));
+        l.set_output_layout("A", Some(WindowLayout::Scrolling));
+        assert!(!l.is_floating(1) && !l.floats_new(None, None));
+        let chat = WorkspaceRef::Name("chat".into());
+        l.set_named_workspaces(&[("chat".into(), None, None, Some(WindowLayout::Floating))]);
+        assert!(l.floats_new(None, Some(&chat)));
+        l.open_window(2, Open { workspace: Some(&chat), ..Default::default() });
+        assert!(l.is_floating(2));
+    }
+
+    #[test]
+    fn a_title_bar_takes_room_above_the_window() {
+        let mut l = Layout::new(Options { gaps: 10, gaps_out: 10, border: 2, title_bars: TitleBars::On, title_bar: 30, ..Options::default() });
+        l.add_monitor("A", (1000, 600));
+        l.add_window(1, false, None);
+        l.add_window(2, true, None);
+        let tile = |l: &Layout, id| *l.tiles(0, &fs).iter().find(|t| t.id == id).unwrap();
+        assert_eq!((tile(&l, 1).rect, tile(&l, 1).bar), (Rect::new(12, 42, 481, 546), 30));
+        // In the middle with its bar, and its bar never off the top.
+        assert_eq!(tile(&l, 2).rect, Rect::new(350, 215, 300, 200));
+        l.set_float(2, Float { pos: Some((100, 0)), ..Default::default() });
+        assert_eq!(tile(&l, 2).rect.y, 30);
+        assert_eq!(l.new_window_size(None, l.bar_height(None, false)), Some((481, 546)));
+        // A rule says otherwise; floating windows only.
+        l.set_bar_rule(1, Some(false));
+        l.set_options(Options { title_bars: TitleBars::Floating, ..l.opts.clone() });
+        assert_eq!((tile(&l, 1).bar, tile(&l, 2).bar), (0, 30));
+    }
+
+    #[test]
+    fn a_floating_window_snaps_and_goes_back() {
+        let mut l = Layout::new(Options { gaps: 10, gaps_out: 10, border: 2, title_bars: TitleBars::Floating, title_bar: 30, ..Options::default() });
+        l.add_monitor("A", (1000, 600));
+        l.add_window(1, true, None);
+        l.set_float(1, Float { pos: Some((100, 100)), size: Some((400, 300)), ..Default::default() });
+        l.toggle_float_maximized(1);
+        // The room less the gaps, its border and its bar inside that.
+        assert_eq!((l.float(1).pos, l.float_size(1)), (Some((12, 42)), Some((976, 546))));
+        l.toggle_float_maximized(1);
+        assert_eq!((l.float(1).pos, l.float_size(1), l.float(1).before), (Some((100, 100)), Some((400, 300)), None));
+        l.snap_float(1, Rect::new(10, 10, 485, 580));
+        l.snap_float(1, Rect::new(505, 10, 485, 580));
+        // Snapped twice, it still goes back to where it was before the first.
+        assert_eq!(l.unsnap(1), Some(Some((400, 300))));
+        assert_eq!(l.unsnap(1), None);
     }
 }

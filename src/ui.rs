@@ -1,5 +1,5 @@
-//! What Softcore draws itself: the keys panel, the question before leaving, and the note
-//! about settings that couldn't be read. All of it is egui in the Rivet look (`rivet-look`),
+//! What Softcore draws itself: the keys panel, the question before leaving, the note about
+//! settings that couldn't be read, and title bars. All of it is egui in the Rivet look (`rivet-look`),
 //! painted in memory by `rivet-kit`, the way Rivet Shell paints its panels. The border colours
 //! and corner radius come from the same place, so windows match the apps inside them.
 
@@ -49,6 +49,8 @@ pub struct Ui {
     chord: Option<(crate::chord::View, MemoryRenderBuffer, (i32, i32))>,
     /// The note shown while a screenshot is chosen, as last painted.
     shot: Option<(crate::shot::View, MemoryRenderBuffer, (i32, i32))>,
+    /// Counts the times the look changed: a title bar painted in an older one is painted again.
+    pub look_count: u64,
 }
 
 fn choice(c: &Config) -> Choice {
@@ -68,7 +70,7 @@ fn rgb(c: Color32) -> [u8; 3] {
 
 impl Ui {
     pub fn new() -> Ui {
-        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark(), chord: None, shot: None }
+        Ui { ctx: egui::Context::default(), tex: soft::Textures::default(), live: LiveLook::new(), panel: Panel::None, buffer: None, dirty: true, look: None, dark: rivet_look::palette::prefers_dark(), chord: None, shot: None, look_count: 0 }
     }
 
     pub fn show(&mut self, panel: Panel) {
@@ -94,6 +96,7 @@ impl Ui {
     }
 
     pub fn settings_changed(&mut self, _c: &Config) {
+        self.look_count += 1;
         self.chord = None;
         self.shot = None;
         self.look = None;
@@ -110,6 +113,7 @@ impl Ui {
         }
         self.live = new;
         self.dark = dark;
+        self.look_count += 1;
         self.chord = None;
         self.shot = None;
         self.look = None;
@@ -254,6 +258,30 @@ impl Ui {
         })
     }
 
+    /// A window's title bar, painted at `view.scale` pixels to the point so it is sharp on the
+    /// display it is on.
+    pub fn title_buffer(&mut self, c: &Config, view: &crate::titlebar::View) -> MemoryRenderBuffer {
+        let ch = choice(c);
+        let ctx = self.ctx.clone();
+        let live = &mut self.live;
+        let s = view.scale.max(1);
+        let mut raw = Self::raw(view.size);
+        if let Some(v) = raw.viewports.get_mut(&ViewportId::ROOT) {
+            v.native_pixels_per_point = Some(s as f32);
+        }
+        let mut out = ctx.run_ui(raw, |ui| {
+            live.frame(ui.ctx(), &ch, false);
+            title_bar(ui, c, view);
+        });
+        self.tex.update(&out.textures_delta);
+        out.textures_delta.clear();
+        let prims = ctx.tessellate(out.shapes, s as f32);
+        let (w, h) = ((view.size.0 * s).max(1) as usize, (view.size.1 * s).max(1) as usize);
+        let mut buf = vec![0u8; w * h * 4];
+        soft::draw(&mut buf, w, h, soft::Order::Rgba, &prims, &self.tex, s as f32);
+        MemoryRenderBuffer::from_slice(&buf, Fourcc::Abgr8888, (w as i32, h as i32), s, Transform::Normal, None)
+    }
+
     /// A panel in the Rivet look, as pixels.
     fn paint_with(&mut self, c: &Config, size: (i32, i32), body: impl FnOnce(&mut egui::Ui)) -> Vec<u8> {
         let ch = choice(c);
@@ -277,6 +305,67 @@ impl Ui {
         let mut buf = vec![0u8; w * h * 4];
         soft::draw(&mut buf, w, h, soft::Order::Rgba, &prims, &self.tex, 1.0);
         buf
+    }
+}
+
+/// A title bar: the window's name in the middle of the room the buttons leave, and the
+/// buttons, each lit as the pointer comes over it (close in the theme's colour for danger).
+fn title_bar(ui: &mut egui::Ui, c: &Config, view: &crate::titlebar::View) {
+    use crate::titlebar::{Part, buttons};
+    let v = ui.visuals().clone();
+    let own = |o: Option<[u8; 3]>, d: Color32| o.map_or(d, |c| Color32::from_rgb(c[0], c[1], c[2]));
+    let fill = if view.active { own(c.title_bar_active, v.panel_fill) } else { own(c.title_bar_inactive, v.extreme_bg_color) };
+    let ink = own(c.title_bar_text, if view.active { v.strong_text_color() } else { v.weak_text_color() });
+    let (w, h) = (view.size.0 as f32, view.size.1 as f32);
+    let p = ui.painter().clone();
+    p.rect_filled(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, h)), 0.0, fill);
+    let stroke = |c: Color32| egui::Stroke::new(1.4, c);
+    for (part, r) in buttons(view.size.0, view.size.1, view.left) {
+        let r = Rect::from_min_size(Pos2::new(r.x as f32, r.y as f32), Vec2::new(r.w as f32, r.h as f32));
+        let lit = view.hover == Some(part);
+        let danger = part == Part::Close;
+        if lit {
+            p.circle_filled(r.center(), (r.height() * 0.34).max(6.0), if danger { v.error_fg_color } else { v.widgets.hovered.bg_fill });
+        }
+        let ink = if lit && danger { Color32::WHITE } else { ink };
+        let g = (r.height() * 0.13).max(3.5);
+        let m = r.center();
+        match part {
+            Part::Close => {
+                p.line_segment([m + Vec2::new(-g, -g), m + Vec2::new(g, g)], stroke(ink));
+                p.line_segment([m + Vec2::new(-g, g), m + Vec2::new(g, -g)], stroke(ink));
+            }
+            // A square, or two on top of each other for one that fills the room already.
+            Part::Maximize if view.maximized => {
+                let k = g * 0.45;
+                p.rect_stroke(Rect::from_center_size(m + Vec2::new(-k, k), Vec2::splat(g * 1.6)), 1.0, stroke(ink), egui::StrokeKind::Middle);
+                p.line_segment([m + Vec2::new(-g * 0.35, -g), m + Vec2::new(g, -g)], stroke(ink));
+                p.line_segment([m + Vec2::new(g, -g), m + Vec2::new(g, g * 0.35)], stroke(ink));
+            }
+            Part::Maximize => {
+                p.rect_stroke(Rect::from_center_size(m, Vec2::splat(g * 2.0)), 1.0, stroke(ink), egui::StrokeKind::Middle);
+            }
+            // A window over another, to float; two side by side, to go back into a column.
+            Part::Float if view.floating => {
+                let r = Rect::from_center_size(m, Vec2::splat(g * 2.0));
+                p.rect_stroke(r, 1.0, stroke(ink), egui::StrokeKind::Middle);
+                p.line_segment([Pos2::new(m.x, r.top()), Pos2::new(m.x, r.bottom())], stroke(ink));
+            }
+            Part::Float => {
+                p.rect_stroke(Rect::from_center_size(m, Vec2::splat(g * 2.0)), 1.0, stroke(ink), egui::StrokeKind::Middle);
+                p.rect_filled(Rect::from_min_size(m + Vec2::new(0.0, -g), Vec2::splat(g)), 1.0, ink);
+            }
+            Part::Bar => {}
+        }
+    }
+    let room = view.size.0 - 2 * 3 * view.size.1;
+    if room > 24 {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::simple_singleline(view.title.clone(), font, ink);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room as f32 - 16.0);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let at = Pos2::new((w - galley.size().x) / 2.0, (h - galley.size().y) / 2.0);
+        p.galley(at, galley, ink);
     }
 }
 

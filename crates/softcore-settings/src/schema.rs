@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::{Bind, LayerRule, ScratchpadRule, WindowRule, WorkspaceRule, Scroll, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_output};
+use crate::{Bind, LayerRule, ScratchpadRule, WindowRule, WorkspaceRule, Scroll, TitleBars, WindowLayout, DEFAULT_BINDS, ModKey, Options, OutputRule, Theme, parse_bind, parse_color, parse_output};
 
 /// The page of a settings window a key belongs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,10 +89,18 @@ pub const SETTINGS: &[Setting] = &[
     s("shadow_offset", Group::Windows, "Shadow offset", "How far below its window a shadow sits, in pixels.", Kind::Int { min: -60, max: 60 }, "7"),
     s("shadow_opacity", Group::Windows, "Shadow strength", "0 is none, 1 is solid at the window's edge.", Kind::Float { min: 0.0, max: 1.0, step: 0.05 }, "0.4"),
     s("shadow_color", Group::Windows, "Shadow colour", "", Kind::Color, "#000000"),
+    s("title_bars", Group::Windows, "Title bars", "A bar over a window with its name and buttons to close, maximize and float it; drag it to move the window. off: none, the border is all. floating: on floating windows. on: on every window.", Kind::Choice(&["off", "floating", "on"]), "off"),
+    s("title_bar_height", Group::Windows, "Title bar height", "In pixels.", Kind::Int { min: 16, max: 64 }, "30"),
+    s("title_bar_active", Group::Windows, "Focused window's title bar", "Empty: from the Rivet theme.", Kind::OptColor, ""),
+    s("title_bar_inactive", Group::Windows, "Other windows' title bars", "Empty: from the Rivet theme.", Kind::OptColor, ""),
+    s("title_bar_text", Group::Windows, "Title bar text", "Empty: from the Rivet theme.", Kind::OptColor, ""),
+    s("title_bar_buttons", Group::Windows, "Title bar buttons", "Which side of the bar the buttons sit on.", Kind::Choice(&["right", "left"]), "right"),
+    s("snap", Group::Windows, "Floating windows snap", "A floating window moved by the pointer lines up with the screen's edges and other floating windows, and fills half or a quarter of the screen when the pointer reaches an edge or a corner, or all of it at the top.", Kind::Bool, "true"),
     s("xwayland", Group::Windows, "X11 programs", "Programs written for X11 open through xwayland-satellite, started when the first one asks. Read when Softcore starts.", Kind::Bool, "true"),
     s("blur", Group::Windows, "Blur behind see-through windows", "What shows through a window that isn't solid is blurred.", Kind::Bool, "true"),
     s("blur_strength", Group::Windows, "Blur strength", "1 is slight, 10 is heavy.", Kind::Int { min: 1, max: 10 }, "5"),
     s("blur_layers", Group::Windows, "Shell surfaces to blur behind", "Their names, with commas between; all of a named surface's rectangle is blurred behind, so name only ones that fill theirs. A surface that asks for blur itself gets it without being named.", Kind::Text, ""),
+    s("layout", Group::Columns, "Windows are placed", "scrolling: in columns on a strip that scrolls. floating: every window floats where it is put, at the size it is given. A display or a workspace can say otherwise.", Kind::Choice(&["scrolling", "floating"]), "scrolling"),
     s("scroll", Group::Columns, "Windows scroll", "horizontal: columns side by side, scrolling left and right. vertical: rows one under the other, scrolling up and down. auto: vertical on a display taller than it is wide.", Kind::Choice(&["horizontal", "vertical", "auto"]), "horizontal"),
     s("column_widths", Group::Columns, "Column widths", "The widths the next-width key steps through, as parts of the screen.", Kind::Widths, "0.3333,0.5,0.6667"),
     s("default_width", Group::Columns, "A new column's width", "As a part of the screen.", Kind::Float { min: 0.1, max: 1.0, step: 0.05 }, "0.5"),
@@ -194,6 +202,13 @@ pub struct Config {
     pub shadow_color: [u8; 3],
     pub blur: bool,
     pub blur_strength: i32,
+    /// None: from the Rivet colours.
+    pub title_bar_active: Option<[u8; 3]>,
+    pub title_bar_inactive: Option<[u8; 3]>,
+    pub title_bar_text: Option<[u8; 3]>,
+    /// The buttons on the bar's left, else its right.
+    pub title_bar_buttons_left: bool,
+    pub snap: bool,
     /// Shell surfaces (by the name each gives itself) to blur behind.
     pub blur_layers: Vec<String>,
     pub animations: bool,
@@ -261,6 +276,11 @@ impl Default for Config {
             shadow_color: [0, 0, 0],
             blur: true,
             blur_strength: 5,
+            title_bar_active: None,
+            title_bar_inactive: None,
+            title_bar_text: None,
+            title_bar_buttons_left: false,
+            snap: true,
             blur_layers: Vec::new(),
             animations: true,
             animation_speed: 1.0,
@@ -473,6 +493,20 @@ impl Config {
             "animation_speed" => self.animation_speed = v.parse().unwrap_or(1.0),
             "column_widths" => self.layout.presets = widths(v).unwrap_or_default(),
             "scroll" => self.layout.scroll = Scroll::parse(v).unwrap_or_default(),
+            "layout" => self.layout.layout = WindowLayout::parse(v).unwrap_or_default(),
+            "title_bars" => {
+                self.layout.title_bars = match v {
+                    "floating" => TitleBars::Floating,
+                    "on" => TitleBars::On,
+                    _ => TitleBars::Off,
+                }
+            }
+            "title_bar_height" => self.layout.title_bar = int().unwrap_or(30).clamp(16, 64),
+            "title_bar_active" => self.title_bar_active = color(),
+            "title_bar_inactive" => self.title_bar_inactive = color(),
+            "title_bar_text" => self.title_bar_text = color(),
+            "title_bar_buttons" => self.title_bar_buttons_left = v == "left",
+            "snap" => self.snap = boolean(),
             "tab_bar" => self.layout.tab_bar = int().unwrap_or(8).clamp(2, 40),
             "center_short_columns" => self.layout.center_short_columns = boolean(),
             "scratchpad_size" => self.layout.scratchpad_size = v.parse().unwrap_or(0.7),

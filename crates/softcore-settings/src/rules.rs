@@ -5,7 +5,7 @@
 //! ```text
 //! rule.video=app-id=mpv floating opacity=1
 //! rule.chat=app-id=*discord* title="* - Discord" workspace=chat
-//! workspace.chat=output=DP-2 scroll=vertical
+//! workspace.chat=output=DP-2 scroll=vertical layout=floating
 //! scratchpad.term=app-id=scratch-term command="rivet-terminal --class scratch-term"
 //! layer.rivet-panel=opacity=0.9 blur=true
 //! ```
@@ -13,7 +13,7 @@
 //! What follows the `=` is words with spaces between; one that holds a space goes in
 //! quotes. A word that names a program or a title may use `*` for anything.
 
-use crate::Scroll;
+use crate::{Scroll, WindowLayout};
 
 /// A workspace, by where it is in its display's stack (from 0) or by its name.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,6 +106,8 @@ pub struct WindowRule {
     pub border: Option<bool>,
     pub shadow: Option<bool>,
     pub blur: Option<bool>,
+    /// Softcore's title bar over it, whatever the title_bars setting says.
+    pub title_bar: Option<bool>,
 }
 
 impl WindowRule {
@@ -114,7 +116,7 @@ impl WindowRule {
         macro_rules! over {
             ($($f:ident),*) => { $( if o.$f.is_some() { self.$f = o.$f.clone(); } )* };
         }
-        over!(floating, workspace, output, width, fullscreen, maximized, scratchpad, focus, opacity, border, shadow, blur);
+        over!(floating, workspace, output, width, fullscreen, maximized, scratchpad, focus, opacity, border, shadow, blur, title_bar);
     }
 }
 
@@ -125,6 +127,7 @@ pub struct WorkspaceRule {
     /// The display it is made on. None: the first.
     pub output: Option<String>,
     pub scroll: Option<Scroll>,
+    pub layout: Option<WindowLayout>,
 }
 
 /// A scratchpad with a name: its own key shows it and puts it away.
@@ -232,6 +235,7 @@ pub fn parse_window_rule(name: &str, value: &str) -> Result<WindowRule, String> 
             "border" => r.border = Some(on()?),
             "shadow" => r.shadow = Some(on()?),
             "blur" => r.blur = Some(on()?),
+            "title-bar" => r.title_bar = Some(on()?),
             _ => return Err(bad()),
         }
     }
@@ -249,6 +253,7 @@ pub fn parse_workspace_rule(name: &str, value: &str) -> Result<WorkspaceRule, St
         match (k, v) {
             ("output", Some(v)) if !v.is_empty() => r.output = Some(v.to_string()),
             ("scroll", Some(v)) => r.scroll = Some(Scroll::parse(v).ok_or_else(bad)?),
+            ("layout", Some(v)) => r.layout = Some(WindowLayout::parse(v).ok_or_else(bad)?),
             _ => return Err(bad()),
         }
     }
@@ -304,9 +309,10 @@ mod tests {
 
     #[test]
     fn rules_read_their_words() {
-        let r = parse_window_rule("chat", "app-id=*discord* title=\"* - Discord\" workspace=chat floating opacity=90% width=40% border=off").unwrap();
+        let r = parse_window_rule("chat", "app-id=*discord* title=\"* - Discord\" workspace=chat floating opacity=90% width=40% border=off title-bar=on").unwrap();
         assert_eq!((r.matches.app_id.as_deref(), r.matches.title.as_deref()), (Some("*discord*"), Some("* - Discord")));
         assert_eq!((r.floating, r.workspace.clone(), r.opacity, r.width, r.border), (Some(true), Some(WorkspaceRef::Name("chat".into())), Some(0.9), Some(0.4), Some(false)));
+        assert_eq!(r.title_bar, Some(true));
         assert!(r.matches.fits("com.discordapp.Discord", "general - Discord") && !r.matches.fits("mpv", "general - Discord"));
         assert_eq!(parse_window_rule("n", "workspace=3 tiled").map(|r| (r.workspace, r.floating)), Ok((Some(WorkspaceRef::Index(2)), Some(false))));
         assert!(parse_window_rule("n", "opacity=2").is_err() && parse_window_rule("n", "sideways").is_err() && parse_window_rule("n", "title=\"x").is_err());

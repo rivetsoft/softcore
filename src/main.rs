@@ -26,6 +26,7 @@ mod render;
 mod settings_cli;
 mod shot;
 mod state;
+mod titlebar;
 mod udev;
 mod watch;
 mod workspaces;

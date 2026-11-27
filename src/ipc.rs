@@ -213,6 +213,7 @@ pub fn workspaces(state: &State) -> Value {
                 "is_focused": wi == m.active && mi == state.layout.active_mon,
                 "active_window_id": ws.active_window(),
                 "scroll": if m.ws_vertical(ws, &state.layout.opts) { "vertical" } else { "horizontal" },
+                "layout": if m.ws_floats(ws, &state.layout.opts) { "floating" } else { "scrolling" },
             }));
         }
     }

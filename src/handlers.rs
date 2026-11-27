@@ -69,8 +69,9 @@ impl CompositorHandler for State {
                 if !top.is_initial_configure_sent() {
                     let (title, app_id) = State::title_and_app_id(window);
                     let rule = self.config.window_rule(&app_id, &title);
-                    let floating = rule.floating.unwrap_or_else(|| State::wants_floating(window)) || rule.scratchpad.is_some();
-                    let size = (!floating).then(|| self.layout.new_window_size(rule.output.as_deref())).flatten();
+                    let floating = rule.floating.unwrap_or_else(|| State::wants_floating(window) || self.layout.floats_new(rule.output.as_deref(), rule.workspace.as_ref())) || rule.scratchpad.is_some();
+                    let bar = self.layout.bar_height(rule.title_bar, floating);
+                    let size = (!floating).then(|| self.layout.new_window_size(rule.output.as_deref(), bar)).flatten();
                     top.with_pending_state(|s| s.size = size.map(Into::into));
                     top.send_configure();
                 }
@@ -152,7 +153,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        // Softcore draws the border; a title bar would only take room in a column.
+        // Softcore draws the border, and the title bar where the settings ask for one.
         surface.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
         self.unmapped.push(Window::new_wayland_window(surface));
     }
@@ -275,6 +276,7 @@ impl State {
         if let Some(id) = self.win_for_surface(surface.wl_surface())
             && let Some(w) = self.wins.get_mut(&id)
         {
+            self.layout.set_bar_rule(id, rule.title_bar);
             w.rule = rule;
         }
         self.queue_redraw();

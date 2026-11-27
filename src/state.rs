@@ -92,6 +92,8 @@ pub struct Win {
     pub focused_at: Duration,
     /// What the settings' lines for windows like it give it.
     pub rule: crate::config::WindowRule,
+    /// Its title bar as last painted.
+    pub bar: Option<(crate::titlebar::View, smithay::backend::renderer::element::memory::MemoryRenderBuffer)>,
 }
 
 #[derive(Default)]
@@ -159,6 +161,7 @@ pub struct State {
     pub blur: crate::blur::Blur,
     /// A floating window being moved or resized with the pointer.
     pub drag: Option<crate::float::Drag>,
+    pub bars: crate::titlebar::Bars,
     pub overview: crate::overview::Overview,
     /// Displays that are plugged in and turned off in the settings: still listed, so they
     /// can be turned on again.
@@ -313,6 +316,7 @@ impl State {
             watch: None,
             blur: Default::default(),
             drag: None,
+            bars: Default::default(),
             overview: Default::default(),
             off_outputs: Vec::new(),
             all_keys: None,
@@ -399,6 +403,7 @@ impl State {
         let size = Self::output_size(&output);
         self.layout.add_monitor(&output.name(), (size.w, size.h));
         self.layout.set_scroll(&output.name(), rule.as_ref().and_then(|r| r.scroll));
+        self.layout.set_output_layout(&output.name(), rule.as_ref().and_then(|r| r.layout));
         self.apply_names();
         if self.outputs.is_empty() {
             self.pointer_pos = (loc.0 as f64 + size.w as f64 / 2.0, loc.1 as f64 + size.h as f64 / 2.0).into();
@@ -431,7 +436,7 @@ impl State {
 
     /// Give the layout the workspaces and scratchpads the settings name.
     pub fn apply_names(&mut self) {
-        let wanted: Vec<_> = self.config.workspaces.iter().map(|w| (w.name.clone(), w.output.clone(), w.scroll)).collect();
+        let wanted: Vec<_> = self.config.workspaces.iter().map(|w| (w.name.clone(), w.output.clone(), w.scroll, w.layout)).collect();
         self.layout.set_named_workspaces(&wanted);
         self.layout.set_scratchpad_sizes(self.config.scratchpads.iter().filter_map(|s| s.size.map(|z| (s.name.clone(), z))).collect());
     }
@@ -504,7 +509,9 @@ impl State {
         let (title, app_id) = Self::title_and_app_id(&window);
         let foreign = self.foreign_toplevel_state.new_toplevel::<State>(&title, &app_id);
         let rule = self.config.window_rule(&app_id, &title);
-        let floating = rule.floating.unwrap_or_else(|| Self::wants_floating(&window));
+        // A dialog or a window of one size floats wherever it is; the rest go as their rule,
+        // else their workspace, says.
+        let floating = rule.floating.or_else(|| Self::wants_floating(&window).then_some(true));
         if let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone())
             && with_states(&surface, |s| s.data_map.insert_if_missing(|| Watched))
         {
@@ -523,7 +530,7 @@ impl State {
                 }
             });
         }
-        self.wins.insert(id, Win { window, foreign, output: None, windowed: false, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed(), rule: rule.clone() });
+        self.wins.insert(id, Win { window, foreign, output: None, windowed: false, deco: Default::default(), tab: None, shown: if self.config.animations { 0.0 } else { 1.0 }, picture: None, before: None, focused_at: self.start.elapsed(), rule: rule.clone(), bar: None });
         if let Some(name) = &rule.scratchpad {
             // Put away as it opens; shown at once when it is what the scratchpad key is
             // waiting for.
@@ -533,6 +540,7 @@ impl State {
                 self.layout.toggle_scratchpad(Some(name));
             }
         } else {
+            self.layout.set_bar_rule(id, rule.title_bar);
             let open = crate::layout::Open { floating, output: rule.output.as_deref(), workspace: rule.workspace.as_ref(), width: rule.width, maximized: rule.maximized == Some(true), focus: rule.focus != Some(false) };
             self.layout.open_window(id, open);
             if rule.fullscreen == Some(true) {
@@ -779,9 +787,10 @@ impl State {
         self.layout.set_options(self.config.layout.clone());
         self.apply_names();
         self.chord = None;
-        for w in self.wins.values_mut() {
+        for (id, w) in self.wins.iter_mut() {
             let (title, app_id) = Self::title_and_app_id(&w.window);
             w.rule = self.config.window_rule(&app_id, &title);
+            self.layout.set_bar_rule(*id, w.rule.title_bar);
         }
         if let Some(k) = self.seat.get_keyboard() {
             if (&old.xkb_layout, &old.xkb_variant, &old.xkb_options) != (&self.config.xkb_layout, &self.config.xkb_variant, &self.config.xkb_options) {
@@ -798,6 +807,7 @@ impl State {
         }
         for o in self.outputs.clone() {
             self.layout.set_scroll(&o.name(), self.config.outputs.iter().find(|r| r.name == o.name()).and_then(|r| r.scroll));
+            self.layout.set_output_layout(&o.name(), self.config.outputs.iter().find(|r| r.name == o.name()).and_then(|r| r.layout));
             if let Some(r) = self.config.outputs.iter().find(|r| r.name == o.name()).cloned() {
                 o.change_current_state(None, Self::rule_transform(&o, Some(&r)), r.scale.map(smithay::output::Scale::Fractional), r.position.map(Into::into));
                 self.output_resized(&o);
@@ -891,6 +901,7 @@ impl State {
             Action::MaximizeColumn => self.layout.toggle_maximized(),
             Action::ToggleTabbed => self.layout.toggle_tabbed(),
             Action::WorkspaceScroll(to) => self.layout.set_workspace_scroll(to),
+            Action::WorkspaceLayout(to) => self.layout.set_workspace_layout(to),
             Action::FullscreenWindow => {
                 if let Some(id) = active {
                     if let Some(w) = self.wins.get_mut(&id) {
@@ -1037,19 +1048,26 @@ impl State {
             return layer_under(Layer::Overlay).or_else(|| layer_under(Layer::Top));
         }
         let tiles = self.tiles(output);
+        // A window's surface at the point, or Some(None) where Softcore's title bar over a
+        // window is, which keeps the pointer from whatever is beneath.
         let window_under = |fullscreen: bool| {
             tiles.iter().rev().filter(|t| t.fullscreen == fullscreen && !t.hidden).find_map(|t| {
+                let on_bar = t.bar > 0 && local.x >= t.rect.x as f64 && local.x < (t.rect.x + t.rect.w) as f64 && local.y >= (t.rect.y - t.bar) as f64 && local.y < t.rect.y as f64;
+                if on_bar {
+                    return Some(None);
+                }
                 let w = &self.wins.get(&t.id)?.window;
                 let loc = Point::<i32, Logical>::from((t.rect.x, t.rect.y)) - w.geometry().loc;
-                w.surface_under(local - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + loc).to_f64() + origin))
+                w.surface_under(local - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| Some((s, (p + loc).to_f64() + origin)))
             })
         };
-        layer_under(Layer::Overlay)
-            .or_else(|| window_under(true))
-            .or_else(|| layer_under(Layer::Top))
-            .or_else(|| window_under(false))
-            .or_else(|| layer_under(Layer::Bottom))
-            .or_else(|| layer_under(Layer::Background))
+        if let Some(hit) = layer_under(Layer::Overlay).or_else(|| window_under(true).flatten()).or_else(|| layer_under(Layer::Top)) {
+            return Some(hit);
+        }
+        if let Some(hit) = window_under(false) {
+            return hit;
+        }
+        layer_under(Layer::Bottom).or_else(|| layer_under(Layer::Background))
     }
 
     /// The window at a point (its popups count as the window).

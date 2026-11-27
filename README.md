@@ -35,6 +35,10 @@ scratch: if you know niri's actions and `niri msg`, you already know Softcore's.
 - **Tabs, floats and scratchpads.** A column can show its windows as tabs; any window can
   float; scratchpads with names come and go on a key.
 - **Up and down too.** A workspace can scroll vertically, which suits a tall display.
+- **Or float, like other desktops.** Any workspace, display or the whole desktop can float
+  its windows instead of scrolling them. Windows snap to halves and quarters of the screen,
+  and title bars of Softcore's own, in the Rivet colors, can go on floating windows or on all
+  of them.
 
 ![A column in Softcore shown as tabs, with a strip across its top](docs/screenshots/tabs.jpg)
 
