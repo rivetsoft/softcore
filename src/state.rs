@@ -707,6 +707,7 @@ impl State {
         self.update_capture_sizes();
         crate::cast::refresh(self);
         crate::picker::refresh(self);
+        crate::shot::refresh(self);
         crate::ipc::notify(self);
         crate::workspaces::refresh(self);
         crate::backend::schedule_frame(self);
@@ -976,14 +977,14 @@ impl State {
             }
             Action::ScreenshotScreen(file) => {
                 if let Some(o) = self.active_output().map(|o| o.name()) {
-                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Screen(o), file: file.map(PathBuf::from), pointer: false, save: true, edit: false });
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Screen(o), file: file.map(PathBuf::from), pointer: false, save: true, edit: false, reply: None, color: false });
                 }
                 self.queue_redraw();
                 return;
             }
             Action::ScreenshotWindow(file) => {
                 if let Some(id) = self.layout.active_window() {
-                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Window(id), file: file.map(PathBuf::from), pointer: false, save: true, edit: false });
+                    self.screenshot = Some(crate::shot::Wanted { what: crate::shot::What::Window(id), file: file.map(PathBuf::from), pointer: false, save: true, edit: false, reply: None, color: false });
                 }
                 self.queue_redraw();
                 return;

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Apps follow the desktop's dark or light and its accent.** GTK, libadwaita, Qt, Firefox and
+  Electron apps take dark or light, the accent and the contrast from the same place Rivet's
+  apps do, and change with them while they run.
+- **Screenshots from apps use Softcore's chooser.** An app that takes a screenshot through the
+  desktop portal gets the same chooser as Print: drag out an area, click a window or take the
+  whole display. The picture is saved with your other screenshots.
+- **Apps can pick a color from the screen.** A color picker in any app that asks the desktop
+  portal waits for a click and gets the color under it.
+
 ## 0.1.0
 
 The first release, an early one: Softcore has run on its author's computer and nowhere else

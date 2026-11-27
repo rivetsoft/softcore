@@ -100,7 +100,7 @@ pub const SETTINGS: &[Setting] = &[
     s("overview_zoom", Group::Columns, "Overview size", "How small the workspaces are drawn in the overview, as a part of their usual size.", Kind::Float { min: 0.2, max: 0.9, step: 0.05 }, "0.5"),
     s("tab_bar", Group::Columns, "Tab strip thickness", "The strip over a tabbed column, a piece for each of its windows.", Kind::Int { min: 2, max: 40 }, "8"),
     s("scratchpad_size", Group::Columns, "Scratchpad window size", "How much of the screen a window shown from the scratchpad takes, each way.", Kind::Float { min: 0.2, max: 1.0, step: 0.05 }, "0.7"),
-    s("theme", Group::Look, "Theme", "For Softcore's own panels and the colours it takes from Rivet.", Kind::Choice(&["system", "light", "dark"]), "system"),
+    s("theme", Group::Look, "Theme", "For Softcore's own panels, the colours it takes from Rivet, and the dark or light apps are told.", Kind::Choice(&["system", "light", "dark"]), "system"),
     s("accent", Group::Look, "Accent", "Used when the desktop's colours aren't followed.", Kind::Color, "#3584e4"),
     s("follow_desktop_colors", Group::Look, "Follow the desktop's colours", "The colours Rivet Shell makes from the wallpaper.", Kind::Bool, "true"),
     s("background", Group::Look, "Behind everything", "Where no wallpaper is drawn. Empty: from the Rivet colours.", Kind::OptColor, ""),
