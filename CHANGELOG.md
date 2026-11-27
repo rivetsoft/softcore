@@ -33,6 +33,9 @@ yet, so keep another session to log in to.
 - **Dressed like the Rivet desktop**: borders and Softcore's own panels use the desktop's
   colors and change when the wallpaper does. Rivet Shell knows its workspaces, windows and
   displays, and any panel or dock made for layer-shell compositors works too.
+- **Panels that overlap work as they look**: where a panel only takes clicks in part of itself,
+  the pointer reaches the panel beneath it everywhere else, so a handle drawn there can be
+  pointed at and clicked.
 - **Also**: blur behind see-through windows and panels, shadows, animations, touchpad
   gestures, X11 programs through Xwayland, a lock screen, and `softcore msg` with an event
   stream for scripts.

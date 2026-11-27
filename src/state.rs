@@ -1014,10 +1014,13 @@ impl State {
             return self.lock.surfaces.iter().find(|(o, _)| o == output).map(|(_, s)| (s.wl_surface().clone(), origin));
         }
         let map = layer_map_for_output(output);
+        // The top-most surface of a layer whose input region takes the point: one that lets the
+        // pointer through (a panel that only takes it along a strip) hands it to those beneath.
         let layer_under = |layer: Layer| {
-            let l = map.layer_under(layer, local)?;
-            let geo = map.layer_geometry(l)?;
-            l.surface_under(local - geo.loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + geo.loc).to_f64() + origin))
+            map.layers_on(layer).rev().find_map(|l| {
+                let geo = map.layer_geometry(l)?;
+                l.surface_under(local - geo.loc.to_f64(), WindowSurfaceType::ALL).map(|(s, p)| (s, (p + geo.loc).to_f64() + origin))
+            })
         };
         // In the overview the windows are pictures to pick from: only the shell's panels,
         // which stay as they are, hear from the pointer.
