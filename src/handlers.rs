@@ -563,13 +563,12 @@ impl smithay::wayland::background_effect::ExtBackgroundEffectHandler for State {
 impl IdleInhibitHandler for State {
     fn inhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.push(surface);
-        self.idle_notifier_state.set_is_inhibited(true);
+        crate::idle_hold::update(self);
     }
 
     fn uninhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.retain(|s| *s != surface);
-        let any = !self.idle_inhibitors.is_empty();
-        self.idle_notifier_state.set_is_inhibited(any);
+        crate::idle_hold::update(self);
     }
 }
 

@@ -196,6 +196,9 @@ pub struct State {
     pub foreign_toplevel_state: ForeignToplevelListState,
     pub idle_notifier_state: IdleNotifierState<State>,
     pub idle_inhibitors: Vec<WlSurface>,
+    /// Idle held off for apps through the portal.
+    pub idle_holds: crate::idle_hold::IdleHolds,
+    pub app_shortcuts: crate::app_shortcuts::AppShortcuts,
     pub xdg_activation_state: XdgActivationState,
 }
 
@@ -339,6 +342,8 @@ impl State {
             foreign_toplevel_state,
             idle_notifier_state,
             idle_inhibitors: Vec::new(),
+            idle_holds: Default::default(),
+            app_shortcuts: Default::default(),
             xdg_activation_state,
         }
     }
@@ -708,6 +713,8 @@ impl State {
         crate::cast::refresh(self);
         crate::picker::refresh(self);
         crate::shot::refresh(self);
+        crate::idle_hold::refresh(self);
+        crate::app_shortcuts::refresh(self);
         crate::ipc::notify(self);
         crate::workspaces::refresh(self);
         crate::backend::schedule_frame(self);
@@ -937,6 +944,7 @@ impl State {
                     crate::layout::Scratch::Hidden => {}
                 }
             }
+            Action::AppShortcut(app, id) => crate::app_shortcuts::fire(self, &app, &id),
             Action::ToggleShortcutsInhibit => self.all_keys = if self.all_keys.is_some() && self.all_keys == active { None } else { active },
             Action::SwitchFloatingFocus => self.layout.switch_floating_focus(),
             Action::FocusWorkspace(w) => {

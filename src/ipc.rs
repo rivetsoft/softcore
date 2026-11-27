@@ -114,6 +114,14 @@ fn serve(state: &mut State, stream: UnixStream) {
             crate::shot::open_for(state, None, stream);
             return;
         }
+        ["inhibit-idle"] => {
+            crate::idle_hold::hold(state, stream);
+            return;
+        }
+        ["app-shortcuts", app, wanted @ ..] => {
+            crate::app_shortcuts::listen(state, app, wanted, stream);
+            return;
+        }
         _ => {}
     }
     if args.first().map(String::as_str) == Some("event-stream") {
@@ -325,7 +333,7 @@ pub fn client(args: &[String]) -> i32 {
     let json_out = args.iter().any(|a| a == "-j" || a == "--json");
     let words: Vec<&String> = args.iter().filter(|a| *a != "-j" && *a != "--json").collect();
     if words.is_empty() {
-        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], casts, cast start output NAME|window ID [--cursor], cast stop ID, pick-cast [--types output,window] [--app NAME], pick-screenshot [--now] FILE, pick-color, event-stream, version");
+        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], casts, cast start output NAME|window ID [--cursor], cast stop ID, pick-cast [--types output,window] [--app NAME], pick-screenshot [--now] FILE, pick-color, inhibit-idle, app-shortcuts APP ID=KEYS..., event-stream, version");
         return 2;
     }
     let Some(path) = std::env::var_os("SOFTCORE_SOCKET") else {
@@ -344,8 +352,9 @@ pub fn client(args: &[String]) -> i32 {
         return 1;
     }
     let stream_events = words[0] == "event-stream";
-    // A cast lasts as long as this connection: say its numbers, then stay until stopped.
-    let hold = words.len() > 1 && words[0] == "cast" && words[1] == "start";
+    // A cast, and keeping the screen awake, last as long as this connection: say the answer,
+    // then stay until stopped.
+    let hold = (words.len() > 1 && words[0] == "cast" && words[1] == "start") || words[0] == "inhibit-idle";
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
         if stream_events {
             println!("{line}");
