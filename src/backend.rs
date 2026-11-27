@@ -62,9 +62,8 @@ pub struct Winit {
 
 pub struct Headless {
     renderer: GlesRenderer,
-    target: GlesRenderbuffer,
-    output: Output,
-    tracker: OutputDamageTracker,
+    /// Each display in memory, side by side: the frame it is drawn into, and what changed on it.
+    screens: Vec<(Output, GlesRenderbuffer, OutputDamageTracker)>,
 }
 
 fn new_output(name: &str, model: &str) -> Output {
@@ -232,7 +231,9 @@ impl Winit {
     }
 }
 
-pub fn init_headless(event_loop: &EventLoop<'static, State>, state: &mut State, size: (i32, i32)) -> Result<(), String> {
+/// One display in memory for each size, left to right. The first is `headless`, the next
+/// `headless-2` and so on.
+pub fn init_headless(event_loop: &EventLoop<'static, State>, state: &mut State, sizes: &[(i32, i32)]) -> Result<(), String> {
     // Any GPU's render node will do: nothing is shown, frames are drawn into memory.
     let mut nodes: Vec<_> = std::fs::read_dir("/dev/dri").map_err(|e| format!("no GPU to draw with (/dev/dri: {e})"))?.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("renderD"))).collect();
     nodes.sort();
@@ -252,16 +253,20 @@ pub fn init_headless(event_loop: &EventLoop<'static, State>, state: &mut State, 
                 continue;
             }
         };
-        let target: GlesRenderbuffer = renderer.create_buffer(Fourcc::Abgr8888, (size.0, size.1).into()).map_err(|e| format!("couldn't make a frame to draw into: {e}"))?;
-        let mode = Mode { size: size.into(), refresh: 60_000 };
-        let output = new_output("headless", "Memory");
-        let _global = output.create_global::<State>(&state.dh);
-        output.change_current_state(Some(mode), Some(Transform::Normal), None, None);
-        output.set_preferred(mode);
         renderer_ready(state, &mut renderer);
-        let tracker = OutputDamageTracker::from_output(&output);
-        state.add_output(output.clone());
-        state.backend = Some(Backend::Headless(Headless { renderer, target, output, tracker }));
+        let mut screens = Vec::new();
+        for (i, size) in sizes.iter().enumerate() {
+            let target: GlesRenderbuffer = renderer.create_buffer(Fourcc::Abgr8888, (size.0, size.1).into()).map_err(|e| format!("couldn't make a frame to draw into: {e}"))?;
+            let mode = Mode { size: (*size).into(), refresh: 60_000 };
+            let output = new_output(&if i == 0 { "headless".to_string() } else { format!("headless-{}", i + 1) }, "Memory");
+            let _global = output.create_global::<State>(&state.dh);
+            output.change_current_state(Some(mode), Some(Transform::Normal), None, None);
+            output.set_preferred(mode);
+            let tracker = OutputDamageTracker::from_output(&output);
+            state.add_output(output.clone());
+            screens.push((output, target, tracker));
+        }
+        state.backend = Some(Backend::Headless(Headless { renderer, screens }));
         return start_frames(event_loop);
     }
     Err(last)
@@ -269,15 +274,17 @@ pub fn init_headless(event_loop: &EventLoop<'static, State>, state: &mut State, 
 
 impl Headless {
     fn draw(&mut self, state: &mut State) {
-        let (elements, clear) = render::elements(state, &mut self.renderer, &self.output, true, true);
-        {
-            let Ok(mut fb) = self.renderer.bind(&mut self.target) else { return };
-            if let Err(e) = self.tracker.render_output(&mut self.renderer, &mut fb, 1, &elements, clear) {
-                tracing::warn!("couldn't draw a frame: {e:?}");
-                return;
+        for (output, target, tracker) in &mut self.screens {
+            let (elements, clear) = render::elements(state, &mut self.renderer, output, true, true);
+            {
+                let Ok(mut fb) = self.renderer.bind(target) else { continue };
+                if let Err(e) = tracker.render_output(&mut self.renderer, &mut fb, 1, &elements, clear) {
+                    tracing::warn!("couldn't draw a frame: {e:?}");
+                    continue;
+                }
             }
+            render::frame_done(state, output);
         }
-        render::frame_done(state, &self.output);
         crate::capture::after_draw(state, &mut self.renderer);
     }
 }

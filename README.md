@@ -145,7 +145,8 @@ Mod+Shift+Slash shows every binding, and Mod+Shift+E leaves.
 
 ## License
 
-[MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Softcore is dual-licensed as `MIT OR Apache-2.0`: use it under the [MIT license](LICENSE-MIT)
+or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 Softcore is built on [Smithay](https://github.com/Smithay/smithay) (MIT). It follows
 [niri](https://github.com/YaLTeR/niri)'s behaviour and uses none of its code.

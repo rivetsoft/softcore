@@ -463,7 +463,12 @@ impl State {
 
     /// The size a floating window has chosen.
     pub fn float_size(&self) -> impl Fn(WinId) -> (i32, i32) + '_ {
-        |id| self.wins.get(&id).map(|w| w.window.geometry().size).map(|s| (s.w.max(1), s.h.max(1))).unwrap_or((1, 1))
+        |id| Self::chosen_size(&self.wins, id)
+    }
+
+    /// The same, from the windows alone, for while the layout is being changed.
+    pub fn chosen_size(wins: &HashMap<WinId, Win>, id: WinId) -> (i32, i32) {
+        wins.get(&id).map(|w| w.window.geometry().size).map(|s| (s.w.max(1), s.h.max(1))).unwrap_or((1, 1))
     }
 
     /// Dialogs and windows that can't be resized float over the columns.
@@ -948,7 +953,10 @@ impl State {
                     self.warp_pointer_to_active_output();
                 }
             }
-            Action::MoveColumnToMonitor(b) => self.layout.move_column_to_monitor(b),
+            Action::MoveColumnToMonitor(b) => {
+                let wins = &self.wins;
+                self.layout.move_column_to_monitor(b, &|id| Self::chosen_size(wins, id));
+            }
             Action::Overview(on) => {
                 self.set_overview(on.unwrap_or(!self.overview.on));
                 return;

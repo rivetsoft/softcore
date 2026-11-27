@@ -203,7 +203,8 @@ impl XdgShellHandler for State {
             }
             // On the display it asks for, when it names one.
             if let Some(o) = output.as_ref().and_then(Output::from_resource) {
-                self.layout.move_window_to_monitor(id, &o.name());
+                let wins = &self.wins;
+                self.layout.move_window_to_monitor(id, &o.name(), &|w| State::chosen_size(wins, w));
             }
             self.layout.set_fullscreen(id, Some(true));
             self.queue_redraw();
