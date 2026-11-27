@@ -1,5 +1,6 @@
 //! Softcore: the scrolling-tiling Wayland compositor for the Rivet desktop.
 
+mod appearance;
 mod backend;
 mod blur;
 mod capture;
@@ -45,7 +46,8 @@ Usage:
   softcore [OPTIONS]        Start Softcore
   softcore msg [-j] WORDS   Ask a running Softcore (softcore msg for the list)
   softcore settings         Show or change settings (softcore settings help)
-  softcore portal           The screen-sharing service apps reach through xdg-desktop-portal
+  softcore portal           The service apps reach through xdg-desktop-portal: screen
+                            sharing, screenshots, colors and dark or light
   softcore validate         Check the settings file and say what couldn't be read
   softcore install          Put the session's files in place; --system installs Softcore
                             for everyone and lists it in the login manager

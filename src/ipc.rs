@@ -78,8 +78,9 @@ fn serve(state: &mut State, stream: UnixStream) {
         }
     };
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
-    // Two requests keep their connection: the answer comes later (when PipeWire has made the
-    // stream, when the person has chosen), and the connection closing means "never mind".
+    // These keep their connection: the answer comes later (when PipeWire has made the stream,
+    // when the person has chosen, when the picture is saved), and the connection closing
+    // means "never mind".
     match words.as_slice() {
         ["cast", "start", kind @ ("output" | "window"), target, rest @ ..] => {
             let source = match *kind {
@@ -99,6 +100,18 @@ fn serve(state: &mut State, stream: UnixStream) {
             let value = |flag: &str| rest.iter().position(|w| *w == flag).and_then(|i| rest.get(i + 1)).copied();
             let types = value("--types").unwrap_or("output,window");
             crate::picker::open(state, types.contains("output"), types.contains("window"), value("--app").unwrap_or("").to_string(), stream);
+            return;
+        }
+        ["pick-screenshot", "--now", file] => {
+            crate::shot::take_for(state, file.into(), stream);
+            return;
+        }
+        ["pick-screenshot", file] => {
+            crate::shot::open_for(state, Some(file.into()), stream);
+            return;
+        }
+        ["pick-color"] => {
+            crate::shot::open_for(state, None, stream);
             return;
         }
         _ => {}
@@ -312,7 +325,7 @@ pub fn client(args: &[String]) -> i32 {
     let json_out = args.iter().any(|a| a == "-j" || a == "--json");
     let words: Vec<&String> = args.iter().filter(|a| *a != "-j" && *a != "--json").collect();
     if words.is_empty() {
-        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], casts, cast start output NAME|window ID [--cursor], cast stop ID, pick-cast [--types output,window] [--app NAME], event-stream, version");
+        eprintln!("softcore msg: say what to ask: outputs, workspaces, windows, focused-window, focused-output, action NAME, screenshot [FILE], casts, cast start output NAME|window ID [--cursor], cast stop ID, pick-cast [--types output,window] [--app NAME], pick-screenshot [--now] FILE, pick-color, event-stream, version");
         return 2;
     }
     let Some(path) = std::env::var_os("SOFTCORE_SOCKET") else {
