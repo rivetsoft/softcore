@@ -19,7 +19,7 @@ impl State {
 
     /// What a key press means to Softcore itself, if anything. `Some(None)`: taken, with
     /// nothing more to do.
-    fn key_pressed(&mut self, mods: &ModifiersState, sym: Keysym, modified: Keysym) -> Option<Option<Action>> {
+    fn key_pressed(&mut self, code: u32, mods: &ModifiersState, sym: Keysym, modified: Keysym) -> Option<Option<Action>> {
         // Ctrl+Alt+F1…F12: another TTY, whatever else is going on. The keyboard layout turns
         // those into keys of their own, which only the modified key shows.
         let vt = modified.raw().wrapping_sub(Keysym::XF86_Switch_VT_1.raw());
@@ -65,6 +65,10 @@ impl State {
             return Some(action);
         }
         let found = self.config.binds.iter().find(|b| b.then.is_empty() && (!locked || b.locked) && (!all || b.action == Action::ToggleShortcutsInhibit) && self.bind_matches(b, mods, sym)).map(|b| b.action.clone());
+        // Then apps' own shortcuts, which Softcore's bindings always come before.
+        if found.is_none() && !locked && !all && crate::app_shortcuts::pressed(self, code, (mods.ctrl, mods.shift, mods.alt, mods.logo), sym) {
+            return Some(None);
+        }
         if found.is_none() && self.overview.on && !locked {
             // The overview has the keyboard: arrows go about it, Return and Escape leave it,
             // and nothing is typed into the window it will leave on.
@@ -108,6 +112,7 @@ impl State {
                         return match state.suppressed_keys.iter().position(|k| *k == raw) {
                             Some(i) => {
                                 state.suppressed_keys.remove(i);
+                                crate::app_shortcuts::released(state, raw);
                                 FilterResult::Intercept(None)
                             }
                             None => FilterResult::Forward,
@@ -115,7 +120,7 @@ impl State {
                     }
                     // The key as it is without Shift, so Mod+Shift+1 is "1" and not "!".
                     let sym = handle.raw_latin_sym_or_raw_current_sym().unwrap_or_else(|| handle.modified_sym());
-                    match state.key_pressed(mods, sym, handle.modified_sym()) {
+                    match state.key_pressed(raw, mods, sym, handle.modified_sym()) {
                         Some(action) => {
                             state.suppressed_keys.push(raw);
                             FilterResult::Intercept(action)
@@ -278,9 +283,14 @@ impl State {
 /// Whether a binding is the key pressed, with exactly its modifiers held (Ctrl, Shift, Alt,
 /// Super). `alt_mod`: Mod is Alt, not Super.
 pub fn bind_matches(b: &Bind, alt_mod: bool, held: (bool, bool, bool, bool), sym: Keysym) -> bool {
-    let want_alt = b.mods.alt || (b.mods.modkey && alt_mod);
-    let want_logo = b.mods.logo || (b.mods.modkey && !alt_mod);
-    held == (b.mods.ctrl, b.mods.shift, want_alt, want_logo) && key_sym(&b.key) == Some(sym)
+    combo_matches(&b.mods, &b.key, alt_mod, held, sym)
+}
+
+/// Whether these modifiers and this key are the key pressed with exactly what is held.
+pub fn combo_matches(mods: &crate::config::Mods, key: &str, alt_mod: bool, held: (bool, bool, bool, bool), sym: Keysym) -> bool {
+    let want_alt = mods.alt || (mods.modkey && alt_mod);
+    let want_logo = mods.logo || (mods.modkey && !alt_mod);
+    held == (mods.ctrl, mods.shift, want_alt, want_logo) && key_sym(key) == Some(sym)
 }
 
 /// The key a binding names, if there is such a key.

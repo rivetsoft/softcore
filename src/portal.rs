@@ -28,7 +28,7 @@ const WINDOW: u32 = 2;
 /// The pointer drawn into the picture.
 const CURSOR_EMBEDDED: u32 = 2;
 
-type Dict = HashMap<String, OwnedValue>;
+pub type Dict = HashMap<String, OwnedValue>;
 
 #[derive(Default)]
 struct Session {
@@ -53,7 +53,7 @@ fn socket() -> Option<PathBuf> {
 
 /// Ask Softcore something and wait for its one-line answer. The connection comes back too:
 /// for a stream, keeping it open keeps the stream.
-fn ask(words: &[&str]) -> Result<(Json, UnixStream), String> {
+pub fn ask(words: &[&str]) -> Result<(Json, UnixStream), String> {
     let path = socket().ok_or("Softcore isn't running")?;
     let mut stream = UnixStream::connect(&path).map_err(|e| format!("couldn't reach Softcore: {e}"))?;
     writeln!(stream, "{}", json!(words)).map_err(|e| e.to_string())?;
@@ -170,7 +170,7 @@ impl Screenshot {
     }
 }
 
-fn owned(v: Value<'_>) -> OwnedValue {
+pub fn owned(v: Value<'_>) -> OwnedValue {
     v.try_to_owned().expect("a value with no file descriptors can be kept")
 }
 
@@ -282,6 +282,9 @@ pub fn run() -> i32 {
         .and_then(|b| b.serve_at(PATH, ScreenCast { sessions: Sessions::default() }))
         .and_then(|b| b.serve_at(PATH, Screenshot))
         .and_then(|b| b.serve_at(PATH, crate::appearance::Settings))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::Inhibit::new()))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::GlobalShortcuts::new()))
+        .and_then(|b| b.serve_at(PATH, crate::portal_desktop::Wallpaper))
         .and_then(|b| b.build());
     match made {
         Ok(connection) => {

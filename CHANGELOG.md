@@ -10,6 +10,14 @@
   whole display. The picture is saved with your other screenshots.
 - **Apps can pick a color from the screen.** A color picker in any app that asks the desktop
   portal waits for a click and gets the color under it.
+- **Apps can keep the screen awake.** A video or a call in a window that isn't in front keeps
+  the screen from dimming and locking, and can keep the computer from suspending.
+- **Apps' shortcuts work in any window.** Push to talk and other shortcuts an app asks for get
+  the keys it suggests when nothing else uses them, and a binding gives keys to the rest
+  (`app-shortcut APP ID`).
+- **Apps can set the wallpaper** through Rivet Shell, after you allow it.
+- **Every desktop portal goes somewhere on purpose.** The portal settings Softcore installs
+  name a backend for each one, and the manual has a table of which and why.
 
 ## 0.1.0
 
