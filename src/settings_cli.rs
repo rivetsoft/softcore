@@ -109,7 +109,7 @@ pub fn run(args: &[String]) -> i32 {
         })),
         ["describe"] => {
             let all: Vec<_> = SETTINGS.iter().map(|s| json!({"key": s.key, "group": s.group.label(), "label": s.label, "help": s.help, "default": s.default, "kind": kind_json(s.kind)})).collect();
-            println!("{}", serde_json::to_string_pretty(&json!({"file": path, "settings": all, "keyed": ["bind.KEYS=ACTION", "bind.KEYS,KEYS=ACTION", "chord.KEYS=NAME", "output.NAME=mode=WxH@HZ scale=N position=X,Y | off", "env.NAME=VALUE", "rule.NAME=app-id=GLOB title=GLOB floating|tiled workspace=NAME output=NAME width=N% maximized fullscreen focus=false scratchpad=NAME opacity=N border=off shadow=off blur=off", "layer.NAMESPACE=opacity=N blur shadow", "workspace.NAME=output=NAME scroll=horizontal|vertical|auto", "scratchpad.NAME=app-id=GLOB title=GLOB command=COMMAND size=N"], "lists": ["spawn"]})).unwrap_or_default());
+            println!("{}", serde_json::to_string_pretty(&json!({"file": path, "settings": all, "keyed": ["bind.KEYS=ACTION", "bind.KEYS,KEYS=ACTION", "chord.KEYS=NAME", "output.NAME=mode=WxH@HZ scale=N position=X,Y scroll=horizontal|vertical|auto layout=scrolling|floating | off", "env.NAME=VALUE", "rule.NAME=app-id=GLOB title=GLOB floating|tiled workspace=NAME output=NAME width=N% maximized fullscreen focus=false scratchpad=NAME opacity=N border=off shadow=off blur=off title-bar=on|off", "layer.NAMESPACE=opacity=N blur shadow", "workspace.NAME=output=NAME scroll=horizontal|vertical|auto layout=scrolling|floating", "scratchpad.NAME=app-id=GLOB title=GLOB command=COMMAND size=N"], "lists": ["spawn"]})).unwrap_or_default());
             0
         }
         _ => {

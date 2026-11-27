@@ -152,8 +152,14 @@ impl State {
                 if !pressed && std::mem::take(&mut self.overview.eat_release) {
                     return;
                 }
+                if !pressed && std::mem::take(&mut self.bars.eat_release) {
+                    return;
+                }
                 if pressed && self.overview.on && !self.lock.locked && self.ui.panel == Panel::None && self.surface_under(self.pointer_pos).is_none() {
                     crate::overview::clicked(self, self.pointer_pos);
+                    return;
+                }
+                if pressed && !pointer.is_grabbed() && !self.lock.locked && self.ui.panel == Panel::None && crate::titlebar::pressed(self, event.button_code()) {
                     return;
                 }
                 if pressed && !pointer.is_grabbed() && !self.lock.locked {
@@ -199,6 +205,7 @@ impl State {
             return;
         }
         crate::picker::hover(self, pos);
+        crate::titlebar::hover(self, pos);
         let under = self.surface_under(pos);
         let pointer = self.seat.get_pointer().unwrap();
         pointer.motion(self, under, &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });

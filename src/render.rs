@@ -411,7 +411,14 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         if grow.is_none() {
             popup_elements(renderer, &surface, at, scale, out);
         }
-        out.extend(edges.border(state, &mut win.deco, rect));
+        // The title bar goes above the window, as small as the window is drawn, and the border
+        // and shadow go round both.
+        let bar = if t.rect.w > 0 { (t.bar as f64 * t.zoom * rect.w as f64 / t.rect.w as f64).round() as i32 } else { 0 };
+        let outer = Rect::new(rect.x, rect.y - bar, rect.w, rect.h + bar);
+        out.extend(edges.border(state, &mut win.deco, outer));
+        if bar > 0 {
+            bar_element(state, renderer, &mut win, t, Rect::new(rect.x, rect.y - bar, rect.w, bar), scale, alpha, out);
+        }
         let loc: Point<i32, Physical> = (at - geo.loc).to_physical_precise_round(scale);
         match grow {
             Some(by) => {
@@ -439,9 +446,35 @@ fn window_elements(state: &mut State, renderer: &mut GlesRenderer, t: &Tile, sca
         if let Some(wall) = wall.filter(|_| !t.fullscreen && win.rule.blur != Some(false)) {
             out.extend(wall.piece(renderer, For::Window(t.id), rect, shown as f32));
         }
-        out.extend(edges.shadow(state, &mut win.deco, rect));
+        out.extend(edges.shadow(state, &mut win.deco, outer));
     }
     state.wins.insert(t.id, win);
+}
+
+/// A window's title bar, drawn at `at`: painted again only when what it shows changed.
+#[allow(clippy::too_many_arguments)]
+fn bar_element(state: &mut State, renderer: &mut GlesRenderer, win: &mut crate::state::Win, t: &Tile, at: Rect, scale: Scale<f64>, alpha: f32, out: &mut Vec<Elem>) {
+    let (title, app_id) = State::title_and_app_id(&win.window);
+    let view = crate::titlebar::View {
+        title: if title.is_empty() { app_id } else { title },
+        size: (((t.rect.w as f64 / t.zoom).round() as i32).max(1), t.bar),
+        scale: scale.x.ceil() as i32,
+        active: t.active,
+        hover: state.bars.hover.filter(|(id, _)| *id == t.id).map(|(_, p)| p),
+        floating: t.floating,
+        maximized: if t.floating { state.layout.float(t.id).before.is_some() } else { state.layout.column_maximized(t.id) },
+        left: state.config.title_bar_buttons_left,
+        look: state.ui.look_count,
+    };
+    if win.bar.as_ref().is_none_or(|(v, _)| *v != view) {
+        let buffer = state.ui.title_buffer(&state.config, &view);
+        win.bar = Some((view, buffer));
+    }
+    let Some((_, buffer)) = &win.bar else { return };
+    let loc = Point::<i32, Logical>::from((at.x, at.y)).to_f64().to_physical(scale);
+    if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, buffer, Some(alpha), None, Some((at.w, at.h).into()), Kind::Unspecified) {
+        out.push(Elem::Memory(e));
+    }
 }
 
 /// A window that has closed, fading out where it stood: a picture of its last frame.
@@ -552,7 +585,10 @@ fn closing_elements(state: &mut State, renderer: &mut GlesRenderer, output: &Out
 /// Where a carried window would be put down: an outline in the accent, faintly filled.
 fn spot_elements(state: &mut State, output: &str, scale: Scale<f64>, out: &mut Vec<Elem>) {
     let Some(mut d) = state.drag.take() else { return };
-    if let Some((_, _, r)) = d.spot.as_ref().filter(|s| s.1 == output)
+    // Where a carried window would go among the columns, or the part of the screen a
+    // floating one would snap to.
+    let mark = d.spot.as_ref().filter(|s| s.1 == output).map(|s| s.2).or_else(|| d.snap.as_ref().filter(|s| s.0 == output).map(|s| s.1));
+    if let Some(r) = mark.as_ref()
         && let Some(shaders) = state.shaders.as_ref()
     {
         let look = state.ui.look(&state.config);

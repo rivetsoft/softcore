@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Floating workspaces.** Set `layout=floating` to make windows float the way most desktops
+  do, for everything, one display (`output.NAME=layout=floating`) or one workspace
+  (`workspace.NAME=layout=floating`). Mod+Ctrl+V switches the workspace in view between
+  floating and scrolling; its windows stay where they are on screen. Scrolling is still the
+  default.
+- **Snapping.** Drag a floating window to the left or right edge of the screen to fill half
+  of it, to a corner for a quarter, or to the top for all of it. Its edges also line up with
+  the screen's and other windows' as you move it. Drag it away and it gets its size back.
+- **Title bars, if you want them.** `title_bars=floating` or `on` puts a bar over windows
+  with their name and buttons to float, maximize and close them. Drag the bar to move the
+  window, or double-click it to maximize. The bars take the Rivet colors, and their height,
+  colors and button side can be set; a rule can turn one off for a program that draws its
+  own.
+- `softcore msg workspaces` gives each workspace's `layout`, for a panel switch.
+
 ## 0.1.0
 
 The first release, an early one: Softcore has run on its author's computer and nowhere else

@@ -51,6 +51,51 @@ pub struct Options {
     pub scroll: Scroll,
     /// How thick the strip of tabs over a tabbed column is.
     pub tab_bar: i32,
+    /// How a workspace places its windows, unless its display or its own line says.
+    pub layout: WindowLayout,
+    /// Which windows have Softcore's title bar over them.
+    pub title_bars: TitleBars,
+    /// How tall a title bar is.
+    pub title_bar: i32,
+}
+
+/// How a workspace places its windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowLayout {
+    /// In columns on a strip that scrolls.
+    #[default]
+    Scrolling,
+    /// Every window floats where it is put, at the size it is given.
+    Floating,
+}
+
+impl WindowLayout {
+    pub fn parse(v: &str) -> Option<WindowLayout> {
+        match v {
+            "scrolling" => Some(WindowLayout::Scrolling),
+            "floating" => Some(WindowLayout::Floating),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowLayout::Scrolling => "scrolling",
+            WindowLayout::Floating => "floating",
+        }
+    }
+}
+
+/// Which windows Softcore draws a title bar over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TitleBars {
+    /// None: Softcore's border is all a window has around it.
+    #[default]
+    Off,
+    /// Floating windows only, which are the ones moved by their title bar.
+    Floating,
+    /// Every window.
+    On,
 }
 
 /// Which way a strip of windows runs, and so which way it scrolls.
@@ -78,7 +123,7 @@ impl Scroll {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7, scroll: Scroll::Horizontal, tab_bar: 8 }
+        Options { gaps: 12, gaps_out: 12, border: 3, presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0], default_width: 0.5, animation_speed: 1.0, center_short_columns: true, scratchpad_size: 0.7, scroll: Scroll::Horizontal, tab_bar: 8, layout: WindowLayout::Scrolling, title_bars: TitleBars::Off, title_bar: 30 }
     }
 }
 
@@ -109,6 +154,9 @@ pub enum Action {
     /// Which way the workspace in view scrolls, whatever its display does. `Some(None)`:
     /// as its display does again. None: the other way from now.
     WorkspaceScroll(Option<Option<Scroll>>),
+    /// How the workspace in view places its windows, whatever its display does. `Some(None)`:
+    /// as its display does again. None: floating if it scrolls, scrolling if it floats.
+    WorkspaceLayout(Option<Option<WindowLayout>>),
     FullscreenWindow,
     /// The window is told it has the whole screen, and stays where it is.
     WindowedFullscreen,
@@ -183,6 +231,11 @@ impl Action {
                 "default" => None,
                 v => Some(Scroll::parse(v).ok_or(format!("{name} needs horizontal, vertical, auto or default"))?),
             })),
+            "toggle-workspace-floating" => Action::WorkspaceLayout(None),
+            "set-workspace-layout" => Action::WorkspaceLayout(Some(match rest {
+                "default" => None,
+                v => Some(WindowLayout::parse(v).ok_or(format!("{name} needs scrolling, floating or default"))?),
+            })),
             "fullscreen-window" => Action::FullscreenWindow,
             "toggle-windowed-fullscreen" => Action::WindowedFullscreen,
             "center-column" => Action::CenterColumn,
@@ -244,6 +297,10 @@ impl Action {
                 Scroll::Vertical => "up and down",
                 Scroll::Auto => "by the shape of its display",
             }),
+            Action::WorkspaceLayout(None) => "This workspace floats its windows, or scrolls them".into(),
+            Action::WorkspaceLayout(Some(None)) => "This workspace places windows as its display does".into(),
+            Action::WorkspaceLayout(Some(Some(WindowLayout::Scrolling))) => "This workspace puts windows in columns".into(),
+            Action::WorkspaceLayout(Some(Some(WindowLayout::Floating))) => "This workspace floats every window".into(),
             Action::ToggleTabbed => "The windows of the column as tabs, or all showing".into(),
             Action::FullscreenWindow => "Full screen".into(),
             Action::WindowedFullscreen => "Full screen as the program sees it, in its place".into(),
@@ -401,6 +458,8 @@ pub struct OutputRule {
     pub transform: Option<(u32, bool)>,
     /// Which way this display's windows scroll. None: as the `scroll` setting says.
     pub scroll: Option<Scroll>,
+    /// How this display's workspaces place their windows. None: as the `layout` setting says.
+    pub layout: Option<WindowLayout>,
 }
 
 /// A display's line: its name, and what follows it.
@@ -441,6 +500,7 @@ pub fn parse_output(name: &str, value: &str) -> Result<OutputRule, String> {
                 r.transform = Some((turn, flip));
             }
             Some(("scroll", v)) => r.scroll = Some(Scroll::parse(v).ok_or_else(bad)?),
+            Some(("layout", v)) => r.layout = Some(WindowLayout::parse(v).ok_or_else(bad)?),
             _ => return Err(bad()),
         }
     }
@@ -501,6 +561,7 @@ Mod+Ctrl+R reset-window-height
 Mod+F maximize-column
 Mod+W toggle-column-tabbed-display
 Mod+Shift+W toggle-workspace-scroll
+Mod+Ctrl+V toggle-workspace-floating
 Mod+Shift+F fullscreen-window
 Mod+Ctrl+Shift+F toggle-windowed-fullscreen
 Mod+C center-column
@@ -619,14 +680,14 @@ mod tests {
 
     #[test]
     fn rules_chords_and_names_are_keyed() {
-        let c = Config::from_text("rule.a=app-id=mpv floating opacity=0.5\nrule.b=title=*film* opacity=1\nrule.a=app-id=mpv tiled\nworkspace.chat=scroll=vertical\nscratchpad.term=app-id=scratch command=foot\nlayer.rivet-*=opacity=0.8\nblur_layers=rivet-panel\nbind.Mod+G,T=spawn foot\nbind.mod+g, shift+w=title=\"Web\" spawn firefox\nchord.Mod+G=Go to\nrule.bad=sideways\n");
+        let c = Config::from_text("rule.a=app-id=mpv floating opacity=0.5\nrule.b=title=*film* opacity=1\nrule.a=app-id=mpv tiled\nworkspace.chat=scroll=vertical layout=floating\nscratchpad.term=app-id=scratch command=foot\nlayer.rivet-*=opacity=0.8\nblur_layers=rivet-panel\nbind.Mod+G,T=spawn foot\nbind.mod+g, shift+w=title=\"Web\" spawn firefox\nchord.Mod+G=Go to\nrule.bad=sideways\n");
         assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
         // A line written again replaces the first, and later lines lie over earlier ones.
         let r = c.window_rule("mpv", "a film");
         assert_eq!((c.rules.len(), r.floating, r.opacity), (2, Some(false), Some(1.0)));
         assert_eq!(c.window_rule("scratch", "").scratchpad.as_deref(), Some("term"));
         assert_eq!(c.window_rule("foot", ""), WindowRule::default());
-        assert_eq!((c.workspaces[0].name.as_str(), c.workspaces[0].scroll), ("chat", Some(Scroll::Vertical)));
+        assert_eq!((c.workspaces[0].name.as_str(), c.workspaces[0].scroll, c.workspaces[0].layout), ("chat", Some(Scroll::Vertical), Some(WindowLayout::Floating)));
         let l = c.layer_rule("rivet-panel");
         assert_eq!((l.opacity, l.blur, c.layer_rule("other").opacity), (Some(0.8), Some(true), None));
         // A chord is its first keys and the ones after.

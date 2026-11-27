@@ -242,9 +242,10 @@ window, when neither is). The rest is what those windows get:
 | `scratchpad=NAME` | Opens put away in that scratchpad. |
 | `opacity=0.9` | How solid it is, with the focus or without. Without this, `inactive_opacity` applies. |
 | `border=off`, `shadow=off`, `blur=off` | Drawn without one. |
+| `title-bar=on`, `title-bar=off` | Has Softcore's title bar, or doesn't, whatever `title_bars` says. |
 
 When several lines fit a window, each word is taken from the last line that has it. The top
-group is used once, as the window opens; the last three rows follow the window, so a title
+group is used once, as the window opens; the last four rows follow the window, so a title
 that changes can change how it looks. The name after `rule.` is only there so the line can
 be found and changed.
 
@@ -265,12 +266,13 @@ still works and means the same as `blur` here.
 
 ```
 workspace.chat=output=DP-2 scroll=vertical
-workspace.mail=
+workspace.mail=layout=floating
 ```
 
 A named workspace is always there, empty or not, first in its display's stack in the order
 the lines stand. `output=` says which display it is made on (and goes back to when that
-display returns); `scroll=` which way it scrolls. A display with nothing on it yet starts on
+display returns); `scroll=` which way it scrolls; `layout=` whether its windows sit in
+columns or float (see [Floating workspaces](#floating-workspaces)). A display with nothing on it yet starts on
 its first named workspace.
 
 Anywhere a workspace is given by number it can be given by name: `focus-workspace chat`,
@@ -426,6 +428,70 @@ it back. A floating window starts in the middle at the size it chose, and from t
   across and down the new display as it was on the old one, all of it on screen.
 
 A window shown from the scratchpad is a floating window, and all of this goes for it.
+
+### Snapping
+
+With `snap=true` (the default), a floating window moved with the pointer lines its edges up
+with the edges of the screen and of other floating windows when they come within a few
+pixels, a gap away from a neighbor or flush with it. Carry it to an edge of the screen and a
+mark shows where it will go: half the screen by the left or right edge, a quarter by a
+corner, all of it at the top. Let go and it fills that part. Carried away again, it has its
+own size back, and the Maximize button or a double click on its title bar puts it back where
+it was before it snapped. Mod+F (`maximize-column`) does the same to a floating window
+with the focus.
+
+## Floating workspaces
+
+Columns are the usual way, and floating is the other: `layout=floating` makes every
+workspace float its windows, the way most desktops do. Each window opens at the size it
+asks for in the middle of the screen, and stays where it is put. Scrolling stays the
+default; the choice can be made for everything, for one display, or for one workspace:
+
+```
+layout=floating                         # every workspace
+output.HDMI-A-1=layout=scrolling        # but this display's workspaces scroll
+workspace.mail=layout=floating          # and so does this named workspace
+```
+
+Mod+Ctrl+V (`toggle-workspace-floating`) turns the workspace in view to floating or back,
+and `set-workspace-layout scrolling|floating|default` says which; `default` is as its
+display does again. A workspace told this keeps it wherever it goes, until it is empty and
+gone.
+
+Turning a workspace to floating floats its windows where they stand, at the size they have,
+so nothing jumps. Turning it back puts them in columns, left to right as they stood. A
+window floated or put in a column on purpose (with Mod+V, by a rule, or a dialog) stays as
+it is either way. On a workspace of floating windows only, the keys that move the focus go
+to the nearest window that way.
+
+`softcore msg workspaces` gives each workspace's `layout`, and the event stream says when it
+changes, so a panel can show a switch for it and flip it with
+`softcore msg action toggle-workspace-floating`.
+
+## Title bars
+
+`title_bars=floating` gives floating windows a title bar of Softcore's own, and `on` gives
+every window one; `off` (the default) leaves the border as all there is. A bar shows the
+window's name and three buttons: float it or put it back in a column, fill the screen with it
+(a column as wide as the screen), and close it. Dragging the bar moves a floating window and
+picks up a window in a column, as Mod and the left button do; a double click fills the
+screen. A rule's `title-bar=on` or `off` decides for the windows it fits.
+
+The bars are drawn in the Rivet look, with the border around bar and window together, so
+they follow the desktop's colors and the wallpaper as the borders do. Each part can be given
+a color of its own:
+
+| Setting | What it does |
+| --- | --- |
+| `title_bar_height` | How tall a bar is, 16 to 64 pixels; 30 to begin with. |
+| `title_bar_active` | The focused window's bar. Empty: from the Rivet theme. |
+| `title_bar_inactive` | The other windows' bars. Empty: from the Rivet theme. |
+| `title_bar_text` | The name and the buttons. Empty: from the Rivet theme. |
+| `title_bar_buttons` | `right` or `left`: the side of the bar the buttons sit on. |
+
+Programs are asked to leave their own title bars off, as before, so a window has one bar,
+not two. Programs that draw theirs anyway (many GTK ones do) can be given `title-bar=off` by a
+rule.
 
 ## Motion, shadows and blur
 
