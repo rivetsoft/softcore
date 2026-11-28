@@ -78,6 +78,24 @@ when you start Softcore from a TTY yourself, but a login manager won't list it.
 `softcore uninstall`, with `--system` or without, takes away what the matching install
 wrote.
 
+### As greetd's login screen
+
+`softcore --greeter COMMAND` shows one program and nothing else, and stops when it ends. It's
+for a greeter run by greetd, such as [Rivet Greeter](https://github.com/rivetsoft/apps/tree/main/apps/rivet-greeter),
+in place of cage. In `/etc/greetd/config.toml`:
+
+```toml
+[default_session]
+command = "softcore --greeter rivet-greeter"
+user = "greeter"
+```
+
+The program gets `WAYLAND_DISPLAY` as any other does. Around it Softcore starts no session:
+no screen-sharing service, no systemd session target, no X11 programs, and nothing from
+`spawn=` in the settings (the greeter's user has none anyway). The greeter can use the layer
+shell or a window; either covers the screen. When it ends, after someone signs in, Softcore
+leaves and greetd starts their session.
+
 ## What it shares with Rivet
 
 Softcore depends on the shared crates of [rivetsoft/apps](https://github.com/rivetsoft/apps),

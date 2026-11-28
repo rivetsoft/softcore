@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A login screen host.** `softcore --greeter COMMAND` shows one program, such as Rivet
+  Greeter, and stops when it ends, so greetd can run its login screen under Softcore in place
+  of cage. No session, portal or X11 programs start around it.
 - **Floating workspaces.** Set `layout=floating` to make windows float the way most desktops
   do, for everything, one display (`output.NAME=layout=floating`) or one workspace
   (`workspace.NAME=layout=floating`). Mod+Ctrl+V switches the workspace in view between
