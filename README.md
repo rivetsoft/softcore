@@ -92,6 +92,9 @@ made for each other, and each works without the other.
   titles and displays, and its Settings has a page for Softcore.
 - **Shared pieces.** Anything Softcore draws itself goes through the Rivet apps' own crates
   (`rivet-look`, `rivet-kit`, `rivet-xdg`).
+- **The login screen too.** `softcore --greeter rivet-greeter` shows
+  [Rivet Greeter](https://github.com/rivetsoft/apps/tree/main/apps/rivet-greeter) for greetd
+  and nothing else, and leaves when someone signs in.
 - **Any other shell works.** Panels, docks and launchers that use the layer-shell protocol
   run under Softcore as they do under niri or Sway.
 

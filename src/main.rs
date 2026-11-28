@@ -65,6 +65,8 @@ Options:
                        commas, for as many displays side by side
   --spawn COMMAND      Run a command once started (may be given more than once)
   --portal             Also run the screen-sharing service (always on, on displays of its own)
+  --greeter COMMAND    Show one program, such as greetd's login screen, and stop when it
+                       ends: no session, portal, X11 apps or programs from the settings
   -h, --help           This
   -V, --version        The version
 
@@ -111,6 +113,7 @@ fn main() {
     let mut sizes = vec![(1280, 800)];
     let mut spawn = Vec::new();
     let mut portal = false;
+    let mut greeter = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -121,6 +124,10 @@ fn main() {
             "--size" => match it.next().and_then(|s| s.split(',').map(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))).collect::<Option<Vec<_>>>()) {
                 Some(s) => sizes = s,
                 None => fail("--size needs a size like 1280x800, or sizes like 1280x800,1920x1080"),
+            },
+            "--greeter" => match it.next() {
+                Some(c) => greeter = Some(c.clone()),
+                None => fail("--greeter needs a command, such as rivet-greeter"),
             },
             "--spawn" => match it.next() {
                 Some(c) => spawn.push(c.clone()),
@@ -170,7 +177,9 @@ fn main() {
         .expect("a timer");
     watch::start(&event_loop.handle(), &mut state);
 
-    xwayland::start(&mut state);
+    if greeter.is_none() {
+        xwayland::start(&mut state);
+    }
     tracing::info!("Softcore is up: WAYLAND_DISPLAY={} SOFTCORE_SOCKET={}", state.socket, state.ipc.path().display());
     // For whoever started it (a script, a check) to find it.
     println!("WAYLAND_DISPLAY={}\nSOFTCORE_SOCKET={}", state.socket, state.ipc.path().display());
@@ -181,8 +190,26 @@ fn main() {
     if !state.config.errors.is_empty() {
         state.ui.show(ui::Panel::Errors);
     }
+    // greetd's login screen: the one program, and Softcore leaves with it (greetd then starts
+    // the session the person signed in to). Nothing of a session is started around it.
+    if let Some(command) = &greeter {
+        let Some(mut child) = state.start(command) else { fail(&format!("couldn't run {command:?}")) };
+        event_loop
+            .handle()
+            .insert_source(Timer::from_duration(Duration::from_millis(250)), move |_, _, state| {
+                // Softcore doesn't wait for what it starts (SIGCHLD is ignored), so once the
+                // program has ended there's nothing left to wait for: an error means it's gone.
+                if matches!(child.try_wait(), Ok(None)) {
+                    return TimeoutAction::ToDuration(Duration::from_millis(250));
+                }
+                state.signal.stop();
+                TimeoutAction::Drop
+            })
+            .expect("a timer");
+    }
     // The screen-sharing service first, so it is there when the desktop's portal looks for it.
-    if (portal || !state.nested)
+    if greeter.is_none()
+        && (portal || !state.nested)
         && let Ok(exe) = std::env::current_exe()
     {
         state.spawn(&format!("exec '{}' portal", exe.display().to_string().replace('\'', "'\\''")));
@@ -191,7 +218,7 @@ fn main() {
     // so what they start (the portal, apps) finds it; then the session's target is started,
     // which is what the desktop's portal and other session services wait for. A mark says
     // this Softcore started it, so a second one beside it doesn't end the first's session.
-    let session_mark = (!state.nested).then(|| std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("softcore-session.{}", std::process::id())));
+    let session_mark = (!state.nested && greeter.is_none()).then(|| std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("softcore-session.{}", std::process::id())));
     if let Some(mark) = &session_mark {
         let display = if state.x11.is_some() { " DISPLAY" } else { "" };
         state.spawn(&format!(
@@ -199,7 +226,8 @@ fn main() {
             mark.display()
         ));
     }
-    for c in state.config.spawn.clone().iter().chain(&spawn) {
+    let from_settings = if greeter.is_none() { state.config.spawn.clone() } else { Vec::new() };
+    for c in from_settings.iter().chain(&spawn) {
         state.spawn(c);
     }
 

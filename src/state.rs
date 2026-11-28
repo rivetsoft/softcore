@@ -832,6 +832,11 @@ impl State {
     // ---- actions ----
 
     pub fn spawn(&self, command: &str) {
+        let _ = self.start(command);
+    }
+
+    /// Start a command as `spawn` does, and give back the program running it.
+    pub fn start(&self, command: &str) -> Option<std::process::Child> {
         let mut c = std::process::Command::new("sh");
         c.arg("-c").arg(command);
         c.env("WAYLAND_DISPLAY", &self.socket).env("SOFTCORE_SOCKET", self.ipc.path()).env("XDG_CURRENT_DESKTOP", "softcore").env("XDG_SESSION_DESKTOP", "softcore").env("XDG_SESSION_TYPE", "wayland");
@@ -866,9 +871,7 @@ impl State {
                 Ok(())
             });
         }
-        if let Err(e) = c.spawn() {
-            tracing::warn!("couldn't run {command:?}: {e}");
-        }
+        c.spawn().inspect_err(|e| tracing::warn!("couldn't run {command:?}: {e}")).ok()
     }
 
     pub fn do_action(&mut self, action: Action) {
